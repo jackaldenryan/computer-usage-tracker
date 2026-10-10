@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 
 let entries = [];
 let today = null;
@@ -630,4 +633,100 @@ $("uploadBtn").addEventListener("click", async () => {
 
 setInterval(load, 60000);
 window.addEventListener("focus", load);
+
+// ---- In-app updates (same UX as cursor-cost-tracking) ----
+let pendingUpdate = null;
+let checkingUpdate = false;
+let installingUpdate = false;
+
+function downloadPercent(downloaded, total) {
+  if (!total || total <= 0) return null;
+  return Math.min(100, Math.round((downloaded / total) * 100));
+}
+
+async function checkUpdates(fromSettings) {
+  if (checkingUpdate) return;
+  checkingUpdate = true;
+  if (fromSettings) {
+    $("updateMsg").textContent = "";
+    $("checkUpdateBtn").textContent = "Checking…";
+  }
+  try {
+    const update = await check();
+    if (update) {
+      if (!installingUpdate && (!pendingUpdate || pendingUpdate.version !== update.version)) {
+        pendingUpdate = update;
+        showToast(update.version, null, null);
+      }
+      if (fromSettings) $("updateMsg").textContent = `Version ${update.version} is available.`;
+    } else if (fromSettings) {
+      const v = await getVersion().catch(() => "current");
+      $("updateMsg").textContent = `You are on the latest version (${v}).`;
+    }
+  } catch (e) {
+    if (fromSettings) $("updateMsg").textContent = String(e?.message || e);
+  } finally {
+    checkingUpdate = false;
+    if (fromSettings) $("checkUpdateBtn").textContent = "Check for updates";
+  }
+}
+
+function showToast(version, percent, error) {
+  $("updateToast").classList.remove("hidden");
+  $("updateToastText").textContent = `Version ${version} is ready. Restart and update now?`;
+  const p = $("updateToastProgress");
+  if (percent === null || percent === undefined) p.classList.add("hidden");
+  else {
+    p.classList.remove("hidden");
+    p.textContent = percent === null ? "Downloading update…" : `Downloading update… ${percent}%`;
+  }
+  const er = $("updateToastError");
+  if (error) {
+    er.classList.remove("hidden");
+    er.textContent = error;
+  } else er.classList.add("hidden");
+  $("updateInstallBtn").textContent = installingUpdate ? "Updating…" : "Restart and update";
+  $("updateInstallBtn").disabled = installingUpdate;
+  $("updateLaterBtn").disabled = installingUpdate;
+}
+
+$("updateLaterBtn").addEventListener("click", () => {
+  if (installingUpdate) return;
+  $("updateToast").classList.add("hidden");
+});
+
+$("updateInstallBtn").addEventListener("click", async () => {
+  if (!pendingUpdate || installingUpdate) return;
+  installingUpdate = true;
+  showToast(pendingUpdate.version, 0, null);
+  let downloaded = 0;
+  let total;
+  try {
+    await pendingUpdate.downloadAndInstall((event) => {
+      if (event.event === "Started") {
+        downloaded = 0;
+        total = event.data.contentLength;
+        showToast(pendingUpdate.version, downloadPercent(0, total), null);
+      } else if (event.event === "Progress") {
+        downloaded += event.data.chunkLength;
+        showToast(pendingUpdate.version, downloadPercent(downloaded, total), null);
+      } else if (event.event === "Finished") {
+        showToast(pendingUpdate.version, 100, null);
+      }
+    });
+    await relaunch();
+  } catch (e) {
+    installingUpdate = false;
+    showToast(pendingUpdate.version, null, String(e?.message || e));
+  }
+});
+
+$("checkUpdateBtn").addEventListener("click", () => checkUpdates(true));
+
+getVersion()
+  .then((v) => ($("appVersion").textContent = v))
+  .catch(() => ($("appVersion").textContent = "…"));
+checkUpdates(false);
+setInterval(() => checkUpdates(false), 60 * 60 * 1000);
+
 load();

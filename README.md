@@ -1,4 +1,48 @@
-# Work Hours Tracker (macOS, Tauri)
+# Work Hours Tracker
+
+Download the Mac app from [Releases](https://github.com/jackaldenryan/work-hours-tracker/releases/latest), drag it into Applications, and open it. It tracks the hours your Mac was in use each day — automatically, from the system power log — and shows them as bar charts with totals and averages.
+
+## Install
+
+1. Open the [latest release](https://github.com/jackaldenryan/work-hours-tracker/releases/latest).
+2. Download **WorkHoursTracker-x.y.z.dmg**.
+3. Open the disk image and drag **Work Hours Tracker** into Applications.
+4. Open **Work Hours Tracker** from Applications.
+
+The app is unsigned. If macOS says it cannot be opened, right-click the app, choose Open, and confirm. You can also run this once:
+
+```
+xattr -cr "/Applications/Work Hours Tracker.app"
+```
+
+Then open it again from Applications.
+
+A `.zip` is attached to the same release. You do not need it for a first install.
+
+## First launch
+
+No permissions to grant — the app never asks for anything. On first open it:
+
+1. Creates its CSV at `~/Library/Application Support/com.workhours.tracker/work-hours.csv`.
+2. Backfills roughly the past 1–2 weeks from the Mac power log (older days stay n/a).
+3. Shows this week so far in the bar chart.
+
+Then open Settings and click **Enable hourly tracking** so hours keep recording even when the app is closed.
+
+## What to try after it is installed
+
+- Check the Today card: it shows today's start time and live hours so far.
+- Enter minutes to subtract for today; the value saves immediately and the hours update.
+- Find a day with a large Auto− value and flip the manual/auto toggle in Settings; its bar should change.
+- Switch to By week / By month, then Custom… and pick a range on the calendar.
+- Open the CSV in Finder and import it into Google Sheets (File → Import → Upload).
+- Quit the app and reopen it: nothing is lost — the power log backfills on launch.
+
+## Updates
+
+The app checks GitHub Releases when it opens and every hour after that. Settings also has **Check for updates**. If a newer version exists, a toast appears bottom-right: **Restart and update**, or **Later**.
+
+## How it works
 
 Automatic daily computer-usage tracker. Uses `pmset -g log` in the background:
 first `Display is turned on` = start, last `Display is turned off` = stop,
@@ -29,6 +73,17 @@ display-off gaps between = automatic subtract.
 npm install
 npm run tauri dev
 ```
+
+Local builds need the updater signing key (CI gets it from repo secrets):
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY=~/.tauri/work-hours-tracker.key
+```
+
+The keypair lives outside the repo (`~/.tauri/`); the public key is baked into
+`src-tauri/tauri.conf.json`, the private key in the `TAURI_SIGNING_PRIVATE_KEY`
+repo secret. Lose the private key and old installs can never verify a new
+update again — back it up.
 
 ## Build (Mac)
 

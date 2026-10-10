@@ -32,6 +32,8 @@ jobs:
         run: npm ci
 
       - name: Build app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: npx tauri build
 
       - name: Publish GitHub release
@@ -41,14 +43,17 @@ jobs:
           version="$(tr -d '[:space:]' < VERSION)"
           app="src-tauri/target/release/bundle/macos/Work Hours Tracker.app"
           dmg=(src-tauri/target/release/bundle/dmg/*.dmg)
+          updater_json="src-tauri/target/release/bundle/macos/latest.json"
           mkdir -p dist
           cp "${dmg[0]}" "dist/WorkHoursTracker-${version}.dmg"
           ditto -c -k --sequesterRsrc --keepParent "$app" "dist/WorkHoursTracker-${version}.zip"
+          # latest.json powers the in-app updater (releases/latest/download/latest.json)
+          cp "$updater_json" dist/latest.json
           notes="Download WorkHoursTracker-${version}.dmg, open it, and drag Work Hours Tracker into Applications.
 
           Open the app, then enable hourly background tracking in Settings."
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" --clobber
+            gh release upload "$GITHUB_REF_NAME" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" dist/latest.json --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" --title "Work Hours Tracker ${GITHUB_REF_NAME}" --notes "$notes"
+            gh release create "$GITHUB_REF_NAME" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" dist/latest.json --title "Work Hours Tracker ${GITHUB_REF_NAME}" --notes "$notes"
           fi

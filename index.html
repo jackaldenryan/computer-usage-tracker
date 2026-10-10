@@ -129,6 +129,12 @@
           </div>
           <p id="bgLastRun" class="hint"></p>
           <p id="bgMsg" class="hint"></p>
+          <h2>Updates</h2>
+          <p class="hint">Current version <span id="appVersion">…</span>. The app checks for updates when it opens and every hour after that.</p>
+          <div class="modal-actions">
+            <button id="checkUpdateBtn" class="btn secondary">Check for updates</button>
+          </div>
+          <p id="updateMsg" class="hint"></p>
           <h2>Backfill from CSV</h2>
           <p class="hint">Upload a CSV to add older days. <b>Required columns:</b> <code>date</code> (YYYY-MM-DD) + <code>hours_worked</code> (final hours, gaps already accounted for). <b>Optional:</b> <code>start</code>, <code>stop</code>, <code>subtract_manual_minutes</code>, <code>subtract_auto_minutes</code>. Missing subtracts are stored as n/a and uploaded hours are trusted as-is in both modes. Existing dates are merged (hours replaced; other fields only when provided).</p>
           <div class="modal-actions">
@@ -138,6 +144,16 @@
         </div>
       </div>
     </div>
+    <aside id="updateToast" class="update-toast hidden" role="status">
+      <p class="update-toast-title">Update available</p>
+      <p id="updateToastText">A new version is ready. Restart and update now?</p>
+      <p id="updateToastProgress" class="hint hidden"></p>
+      <p id="updateToastError" class="save-msg hidden"></p>
+      <div class="modal-actions">
+        <button id="updateInstallBtn" class="btn">Restart and update</button>
+        <button id="updateLaterBtn" class="btn secondary">Later</button>
+      </div>
+    </aside>
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>
