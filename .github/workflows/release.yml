@@ -41,19 +41,33 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           version="$(tr -d '[:space:]' < VERSION)"
+          tag="$GITHUB_REF_NAME"
           app="src-tauri/target/release/bundle/macos/Work Hours Tracker.app"
           dmg=(src-tauri/target/release/bundle/dmg/*.dmg)
-          updater_json="src-tauri/target/release/bundle/macos/latest.json"
+          tar=(src-tauri/target/release/bundle/macos/*.app.tar.gz)
+          sig="${tar[0]}.sig"
           mkdir -p dist
           cp "${dmg[0]}" "dist/WorkHoursTracker-${version}.dmg"
           ditto -c -k --sequesterRsrc --keepParent "$app" "dist/WorkHoursTracker-${version}.zip"
-          # latest.json powers the in-app updater (releases/latest/download/latest.json)
-          cp "$updater_json" dist/latest.json
+          cp "${tar[0]}" "dist/WorkHoursTracker-${version}.app.tar.gz"
           notes="Download WorkHoursTracker-${version}.dmg, open it, and drag Work Hours Tracker into Applications.
 
           Open the app, then enable hourly background tracking in Settings."
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" dist/latest.json --clobber
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" "dist/WorkHoursTracker-${version}.app.tar.gz" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" dist/latest.json --title "Work Hours Tracker ${GITHUB_REF_NAME}" --notes "$notes"
+            gh release create "$tag" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" "dist/WorkHoursTracker-${version}.app.tar.gz" --title "Work Hours Tracker ${tag}" --notes "$notes"
           fi
+          sig_b64="$(tr -d '[:space:]' < "$sig")"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/WorkHoursTracker-${version}.app.tar.gz"
+          node -e '
+            const fs = require("fs");
+            const [version, notes, sig, url] = process.argv.slice(1);
+            fs.writeFileSync("dist/latest.json", JSON.stringify({
+              version,
+              notes,
+              pub_date: new Date().toISOString(),
+              platforms: { "darwin-aarch64": { signature: sig, url } },
+            }, null, 2) + "\n");
+          ' "$version" "$notes" "$sig_b64" "$url"
+          gh release upload "$tag" dist/latest.json --clobber
