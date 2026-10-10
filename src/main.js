@@ -8,6 +8,7 @@ let entries = [];
 let today = null;
 let settings = { csv_path: "", use_auto_subtract: false, use_24h: false, day_start_hour: 4, min_session_minutes: 10 };
 let view = "week";
+let chartMetric = "hours";
 // Custom range — same functionality as cursor-cost-tracking's RangePicker:
 // preset buttons (to-date + rolling) plus a calendar for arbitrary ranges.
 let customStart = "";
@@ -116,6 +117,45 @@ function hoursFor(e, key) {
   if (today && key === today.date) return today.hours_so_far ?? 0;
   return e ? e.hours_worked ?? 0 : 0;
 }
+function timesFor(e, key) {
+  if (today && key === today.date) {
+    return { start: today.start || "", stop: today.stop_or_now || "" };
+  }
+  return { start: (e && e.start) || "", stop: (e && e.stop) || "" };
+}
+function mean(arr) {
+  return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+}
+function summarizeKeys(keys, m, todayStr) {
+  let total = 0, count = 0;
+  const starts = [];
+  const stops = [];
+  for (const key of keys) {
+    if (key > todayStr) continue;
+    const e = m.get(key);
+    if (!e) continue;
+    const hrs = hoursFor(e, key);
+    total += hrs;
+    count++;
+    if (hrs > 0) {
+      const t = timesFor(e, key);
+      const ss = timeToDaySec(t.start);
+      const es = timeToDaySec(t.stop);
+      if (ss != null) starts.push(ss);
+      if (es != null) stops.push(es);
+    }
+  }
+  const startSec = mean(starts);
+  const stopSec = mean(stops);
+  return {
+    hours: count ? Math.round(total * 100) / 100 : null,
+    startSec,
+    stopSec,
+    start: startSec != null ? daySecToClock(startSec) : "",
+    stop: stopSec != null ? daySecToClock(stopSec) : "",
+    count,
+  };
+}
 function timeToSec(t) {
   if (!t) return null;
   const p = String(t).split(":").map(Number);
@@ -195,9 +235,18 @@ function monthDays() {
 function dayItem(d, m, todayStr) {
   const key = fmtLocal(d);
   const e = m.get(key);
-  if (key > todayStr) return { label: "", sub: "", key, hours: null, na: false, future: true, date: d };
-  if (!e) return { label: "", sub: key.slice(5), key, hours: null, na: true, future: false, date: d };
-  return { label: "", sub: key.slice(5), key, hours: hoursFor(e, key), na: false, future: false, date: d };
+  if (key > todayStr) {
+    return { label: "", sub: "", key, hours: null, start: "", stop: "", startSec: null, stopSec: null, na: false, future: true, date: d };
+  }
+  if (!e) {
+    return { label: "", sub: key.slice(5), key, hours: null, start: "", stop: "", startSec: null, stopSec: null, na: true, future: false, date: d };
+  }
+  const t = timesFor(e, key);
+  return {
+    label: "", sub: key.slice(5), key, hours: hoursFor(e, key),
+    start: t.start, stop: t.stop, startSec: timeToDaySec(t.start), stopSec: timeToDaySec(t.stop),
+    na: false, future: false, date: d,
+  };
 }
 
 function lastNWeeks(n) {
@@ -208,20 +257,18 @@ function lastNWeeks(n) {
   for (let i = n - 1; i >= 0; i--) {
     const mon = new Date(cur);
     mon.setDate(cur.getDate() - i * 7);
-    let total = 0, count = 0;
+    const keys = [];
     for (let k = 0; k < 7; k++) {
       const d = new Date(mon);
       d.setDate(mon.getDate() + k);
-      const key = fmtLocal(d);
-      if (key > todayStr) continue;
-      const e = m.get(key);
-      if (e) { total += hoursFor(e, key); count++; }
+      keys.push(fmtLocal(d));
     }
+    const s = summarizeKeys(keys, m, todayStr);
     const future = fmtLocal(mon) > todayStr;
     out.push({
       label: `Wk ${fmtLocal(mon).slice(5)}`, sub: "", key: fmtLocal(mon),
-      hours: count ? Math.round(total * 100) / 100 : null,
-      na: !count && !future, future,
+      hours: s.hours, start: s.start, stop: s.stop, startSec: s.startSec, stopSec: s.stopSec,
+      na: !s.count && !future, future,
     });
   }
   return out;
@@ -235,21 +282,21 @@ function groupWeeks(startStr, endStr, m, todayStr) {
   if (!s || !e) return out;
   const cur = mondayOf(s);
   while (cur <= e) {
-    let total = 0, count = 0;
+    const keys = [];
     for (let k = 0; k < 7; k++) {
       const d = new Date(cur);
       d.setDate(cur.getDate() + k);
       const key = fmtLocal(d);
-      if (key < startStr || key > endStr || key > todayStr) continue;
-      const en = m.get(key);
-      if (en) { total += hoursFor(en, key); count++; }
+      if (key < startStr || key > endStr) continue;
+      keys.push(key);
     }
+    const s = summarizeKeys(keys, m, todayStr);
     const monStr = fmtLocal(cur);
     const future = monStr > todayStr;
     out.push({
       label: `Wk ${monStr.slice(5)}`, sub: "", key: monStr,
-      hours: count ? Math.round(total * 100) / 100 : null,
-      na: !count && !future, future, grouped: true,
+      hours: s.hours, start: s.start, stop: s.stop, startSec: s.startSec, stopSec: s.stopSec,
+      na: !s.count && !future, future, grouped: true,
     });
     cur.setDate(cur.getDate() + 7);
   }
@@ -265,19 +312,17 @@ function lastNMonths(n) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const y = d.getFullYear(), mo = d.getMonth();
     const days = new Date(y, mo + 1, 0).getDate();
-    let total = 0, count = 0;
+    const keys = [];
     for (let k = 1; k <= days; k++) {
-      const key = `${y}-${String(mo + 1).padStart(2, "0")}-${String(k).padStart(2, "0")}`;
-      if (key > todayStr) continue;
-      const e = m.get(key);
-      if (e) { total += hoursFor(e, key); count++; }
+      keys.push(`${y}-${String(mo + 1).padStart(2, "0")}-${String(k).padStart(2, "0")}`);
     }
+    const s = summarizeKeys(keys, m, todayStr);
     const future = fmtLocal(d) > todayStr;
     const label = d.toLocaleString("en-US", { month: "short" });
     out.push({
       label, sub: String(y).slice(2), key: `${y}-${String(mo + 1).padStart(2, "0")}`,
-      hours: count ? Math.round(total * 100) / 100 : null,
-      na: !count && !future, future,
+      hours: s.hours, start: s.start, stop: s.stop, startSec: s.startSec, stopSec: s.stopSec,
+      na: !s.count && !future, future,
     });
   }
   return out;
@@ -443,29 +488,59 @@ function barData() {
     }
     return { title: `Custom (${fmtRangeLabel()})`, items, grouped: false };
   }
-  if (view === "byweek") return { title: "Total hours per week (last 8)", items: lastNWeeks(8) };
-  return { title: "Total hours per month (last 6)", items: lastNMonths(6) };
+  if (view === "byweek") return { title: "Last 8 weeks", items: lastNWeeks(8) };
+  return { title: "Last 6 months", items: lastNMonths(6) };
+}
+
+function metricVal(it) {
+  if (chartMetric === "start") return it.startSec;
+  if (chartMetric === "stop") return it.stopSec;
+  return it.hours;
+}
+function metricText(it) {
+  if (it.future) return "";
+  if (chartMetric === "start" || chartMetric === "stop") {
+    const t = chartMetric === "start" ? it.start : it.stop;
+    if (it.na || t == null || t === "") return "n/a";
+    return fmtClock(t);
+  }
+  if (it.na || it.hours == null) return "n/a";
+  return it.hours ? it.hours.toFixed(it.hours < 10 ? 2 : 1) : "0";
+}
+function metricTip(it) {
+  const name = chartMetric === "hours" ? "hours" : chartMetric;
+  if (it.future) return `${it.key || it.label}: future`;
+  if (chartMetric === "hours") {
+    return `${it.key || it.label}: ${it.hours == null ? "n/a" : it.hours.toFixed(2) + "h"}`;
+  }
+  const t = chartMetric === "start" ? it.start : it.stop;
+  return `${it.key || it.label}: ${t ? fmtClock(t) : "n/a"} ${name}`;
 }
 
 function renderAll() {
   const { title, items, grouped } = barData();
-  $("viewTitle").textContent = `${title} · ${settings.use_auto_subtract ? "auto subtract" : "manual subtract"}`;
+  const groupedTime = (view === "byweek" || view === "bymonth" || grouped) && chartMetric !== "hours";
+  const metricName = chartMetric === "hours" ? "hours" : groupedTime ? `avg ${chartMetric}` : chartMetric;
+  $("viewTitle").textContent = `${title} · ${metricName} · ${settings.use_auto_subtract ? "auto subtract" : "manual subtract"}`;
   if (view === "custom") $("rangeLabel").textContent = fmtRangeLabel();
-  const vals = items.filter((i) => !i.future && !i.na && i.hours != null).map((i) => i.hours);
+  const vals = items.filter((i) => !i.future && !i.na && metricVal(i) != null).map(metricVal);
   const max = Math.max(1, ...vals);
   const chart = $("chart");
   chart.innerHTML = "";
   for (const it of items) {
     const col = document.createElement("div");
     col.className = "bar-col";
+    const val = metricVal(it);
+    const empty = it.future || it.na || val == null;
     const v = document.createElement("div");
-    v.className = "bar-val" + (it.na ? " na" : "");
-    v.textContent = it.future ? "" : it.na ? "n/a" : (it.hours ? it.hours.toFixed(it.hours < 10 ? 2 : 1) : "0");
+    v.className = "bar-val" + (empty && !it.future ? " na" : "");
+    v.textContent = metricText(it);
     const b = document.createElement("div");
-    const h = (it.future || it.na || !it.hours) ? 8 : Math.max(10, Math.round((it.hours / max) * 170));
-    b.className = "bar" + (!it.hours && !it.na ? " zero" : "") + (it.future ? " future" : "") + (it.na ? " na" : "");
+    const h = empty ? 8 : Math.max(10, Math.round((val / max) * 170));
+    const isZero = chartMetric === "hours" && !it.hours && !it.na && !it.future;
+    b.className = "bar" + (isZero ? " zero" : "") + (it.future ? " future" : "") + (empty && !it.future ? " na" : "");
     b.style.height = h + "px";
-    col.title = `${it.key || it.label}: ${it.hours == null ? "n/a" : it.hours.toFixed(2) + "h"}`;
+    col.title = metricTip(it);
     const l = document.createElement("div");
     l.className = "bar-label";
     l.textContent = it.label;
@@ -486,7 +561,7 @@ function renderAll() {
       const val = col.querySelector(".bar-val");
       const lab = col.querySelector(".bar-label");
       const sub = col.querySelector(".bar-sub");
-      if (val) val.classList.toggle("tight", w < 28);
+      if (val) val.classList.toggle("tight", w < (chartMetric === "hours" ? 28 : 44));
       if (lab) lab.classList.toggle("tight", w < 18);
       if (sub) sub.classList.toggle("tight", w < 22);
     }
@@ -592,6 +667,10 @@ document.querySelectorAll(".tab").forEach((b) =>
     renderAll();
   })
 );
+$("chartMetric").addEventListener("change", (ev) => {
+  chartMetric = ev.target.value;
+  renderAll();
+});
 
 // ---- RangePicker panel (ported from cursor-cost-tracking) ----
 function markActivePreset() {

@@ -1,7 +1,12 @@
 //! Shared tracking logic used by both the Tauri GUI (`main.rs`) and the
 //! headless hourly helper (`bin/wht-track.rs`).
 //!
-//! Main CSV columns:
+//! Raw data: `segments.csv` next to the main CSV, one row per display-on →
+//! display-off (`started_at,ended_at` as local `YYYY-MM-DD HH:MM:SS`).
+//! Empty `ended_at` = still on. Never filtered, never deleted; the hourly
+//! job upserts by `started_at` from `pmset -g log`.
+//!
+//! Main CSV (`work-hours.csv`) is a materialized view of those segments:
 //! date,start,stop,subtract_manual_minutes,subtract_auto_minutes,hours_worked
 //! - subtract_* empty = N/A (unknown), otherwise integer minutes.
 //! - hours_worked = final trusted hours. For auto-tracked days it is
@@ -18,7 +23,7 @@
 //! sustained usage (machine off/asleep all day is also 0h). Missing dates
 //! BEFORE the epoch stay missing (= N/A): back then nobody was looking.
 
-use chrono::{Local, NaiveDate, NaiveTime, Timelike};
+use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -572,6 +577,199 @@ pub fn write_entries_to_csv(path: &str, map: &BTreeMap<String, DayEntry>) -> Res
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+pub struct Segment {
+    pub started_at: NaiveDateTime,
+    pub ended_at: Option<NaiveDateTime>,
+}
+
+const DT_FMT: &str = "%Y-%m-%d %H:%M:%S";
+
+fn fmt_dt(dt: NaiveDateTime) -> String {
+    dt.format(DT_FMT).to_string()
+}
+
+fn fmt_hms(dt: NaiveDateTime) -> String {
+    dt.format("%H:%M:%S").to_string()
+}
+
+fn parse_dt(s: &str) -> Option<NaiveDateTime> {
+    NaiveDateTime::parse_from_str(s.trim(), DT_FMT).ok()
+}
+
+pub fn segments_path(csv_path: &str) -> PathBuf {
+    Path::new(csv_path).with_file_name("segments.csv")
+}
+
+pub fn parse_segments_from_log(log: &str) -> Vec<Segment> {
+    let mut events: Vec<(NaiveDateTime, bool)> = Vec::new();
+    for line in log.lines() {
+        let Some((cal, t, _)) = parse_log_stamp(line) else {
+            continue;
+        };
+        let dt = cal.and_time(t);
+        if line.contains("Display is turned on") {
+            events.push((dt, true));
+        } else if line.contains("Display is turned off") {
+            events.push((dt, false));
+        }
+    }
+    events.sort_by_key(|(dt, _)| *dt);
+    let mut out = Vec::new();
+    let mut open: Option<NaiveDateTime> = None;
+    for (dt, is_on) in events {
+        if is_on {
+            if open.is_none() {
+                open = Some(dt);
+            }
+        } else if let Some(on) = open.take() {
+            if dt > on {
+                out.push(Segment {
+                    started_at: on,
+                    ended_at: Some(dt),
+                });
+            }
+        }
+    }
+    if let Some(on) = open {
+        out.push(Segment {
+            started_at: on,
+            ended_at: None,
+        });
+    }
+    out
+}
+
+fn load_segments(path: &Path) -> BTreeMap<String, Segment> {
+    let mut map = BTreeMap::new();
+    let Ok(mut rdr) = csv::ReaderBuilder::new().flexible(true).from_path(path) else {
+        return map;
+    };
+    for rec in rdr.records() {
+        let Ok(r) = rec else { continue };
+        let started = r.get(0).unwrap_or("").trim();
+        let Some(st) = parse_dt(started) else { continue };
+        let ended = r.get(1).unwrap_or("").trim();
+        let en = if ended.is_empty() {
+            None
+        } else {
+            parse_dt(ended)
+        };
+        map.insert(
+            fmt_dt(st),
+            Segment {
+                started_at: st,
+                ended_at: en,
+            },
+        );
+    }
+    map
+}
+
+fn write_segments(path: &Path, map: &BTreeMap<String, Segment>) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    let mut wtr = csv::Writer::from_path(path).map_err(|e| e.to_string())?;
+    wtr.write_record(["started_at", "ended_at"])
+        .map_err(|e| e.to_string())?;
+    for s in map.values() {
+        wtr.write_record([
+            fmt_dt(s.started_at),
+            s.ended_at.map(fmt_dt).unwrap_or_default(),
+        ])
+        .map_err(|e| e.to_string())?;
+    }
+    wtr.flush().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn merge_segments(map: &mut BTreeMap<String, Segment>, incoming: Vec<Segment>) {
+    for s in incoming {
+        let k = fmt_dt(s.started_at);
+        match map.get_mut(&k) {
+            Some(ex) => {
+                if s.ended_at.is_some() {
+                    ex.ended_at = s.ended_at;
+                }
+            }
+            None => {
+                map.insert(k, s);
+            }
+        }
+    }
+}
+
+fn earliest_segment_date(
+    segs: &BTreeMap<String, Segment>,
+    day_start_hour: u32,
+) -> Option<NaiveDate> {
+    segs.values()
+        .map(|s| assign_logical_date(s.started_at.date(), s.started_at.time(), day_start_hour))
+        .min()
+}
+
+fn group_segments_by_day(
+    segs: &BTreeMap<String, Segment>,
+    day_start_hour: u32,
+) -> BTreeMap<String, Vec<Segment>> {
+    let mut m: BTreeMap<String, Vec<Segment>> = BTreeMap::new();
+    for s in segs.values() {
+        let d = assign_logical_date(s.started_at.date(), s.started_at.time(), day_start_hour)
+            .to_string();
+        m.entry(d).or_default().push(s.clone());
+    }
+    for v in m.values_mut() {
+        v.sort_by_key(|s| s.started_at);
+    }
+    m
+}
+
+fn day_from_segments(
+    segs: &[Segment],
+    min_session_minutes: u32,
+    now: Option<NaiveDateTime>,
+) -> (Option<String>, Option<String>) {
+    let min_dur = chrono::Duration::minutes(clamp_min_session_minutes(min_session_minutes) as i64);
+    let mut first_on = None;
+    let mut last_off = None;
+    for s in segs {
+        let dur = match s.ended_at {
+            Some(en) => en - s.started_at,
+            None => now
+                .filter(|n| *n > s.started_at)
+                .map(|n| n - s.started_at)
+                .unwrap_or_else(chrono::Duration::zero),
+        };
+        if dur < min_dur {
+            continue;
+        }
+        if first_on.is_none() {
+            first_on = Some(fmt_hms(s.started_at));
+        }
+        last_off = s.ended_at.map(fmt_hms);
+    }
+    (first_on, last_off)
+}
+
+fn auto_gap_from_segments(segs: &[Segment]) -> Option<i64> {
+    if segs.is_empty() {
+        return None;
+    }
+    let mut gap_secs: i64 = 0;
+    for w in segs.windows(2) {
+        if let Some(end) = w[0].ended_at {
+            let d = (w[1].started_at - end).num_seconds();
+            if d > 0 {
+                gap_secs += d;
+            }
+        }
+    }
+    Some((gap_secs as f64 / 60.0).round() as i64)
+}
+
 pub fn is_uploaded(e: &DayEntry) -> bool {
     e.start.is_empty() && e.stop.is_empty() && e.hours_worked > 0.0
 }
@@ -609,12 +807,23 @@ pub fn backfill_impl(
     let mut map = load_entries_from_csv(csv_path);
     let today_s = today.to_string();
 
-    // Pass 1: fill missing days within pmset log coverage [log_start .. today].
+    let seg_path = segments_path(csv_path);
+    let mut segs = load_segments(&seg_path);
+    merge_segments(&mut segs, parse_segments_from_log(log));
+    write_segments(&seg_path, &segs)?;
+
     let log_start = earliest_logged_date(log, day_start_hour).unwrap_or_else(|| today_s.clone());
-    let Ok(mut d) = NaiveDate::parse_from_str(&log_start, "%Y-%m-%d") else {
+    let Ok(log_start_d) = NaiveDate::parse_from_str(&log_start, "%Y-%m-%d") else {
         return Ok(map.values().cloned().collect());
     };
     let today_d = today;
+    let mut d = log_start_d;
+    if let Some(sd) = earliest_segment_date(&segs, day_start_hour) {
+        if sd < d {
+            d = sd;
+        }
+    }
+    let by_day = group_segments_by_day(&segs, day_start_hour);
 
     while d <= today_d {
         let ds = d.to_string();
@@ -626,15 +835,34 @@ pub fn backfill_impl(
             continue;
         }
         let prev = map.get(&ds).cloned();
-        let now = if ds == today_s {
-            Some(Local::now().naive_local().time())
+        let now_dt = if ds == today_s {
+            Some(Local::now().naive_local())
         } else {
             None
         };
-        let (start, stop) = parse_day(log, &ds, day_start_hour, min_session_minutes, now);
-        let s = start.unwrap_or_default();
-        let e = stop.unwrap_or_default();
-        let auto = compute_auto_gap_minutes(log, &ds, day_start_hour);
+        let day_segs = by_day.get(&ds).map(|v| v.as_slice()).unwrap_or(&[]);
+        let (s, e, auto) = if !day_segs.is_empty() {
+            let (start, stop) = day_from_segments(day_segs, min_session_minutes, now_dt);
+            (
+                start.unwrap_or_default(),
+                stop.unwrap_or_default(),
+                auto_gap_from_segments(day_segs),
+            )
+        } else if d >= log_start_d {
+            let now = now_dt.map(|t| t.time());
+            let (start, stop) = parse_day(log, &ds, day_start_hour, min_session_minutes, now);
+            (
+                start.unwrap_or_default(),
+                stop.unwrap_or_default(),
+                compute_auto_gap_minutes(log, &ds, day_start_hour),
+            )
+        } else {
+            d = d.succ_opt().unwrap_or(today_d);
+            if d > today_d {
+                break;
+            }
+            continue;
+        };
         let auto = if s.is_empty() { None } else { auto.or(Some(0)) };
         let man = prev
             .as_ref()
@@ -1366,9 +1594,10 @@ mod tests {
     }
 
     fn tmp_csv(name: &str) -> String {
-        let p = std::env::temp_dir().join(name);
-        let _ = std::fs::remove_file(&p);
-        p.to_str().unwrap().to_string()
+        let dir = std::env::temp_dir().join(name.trim_end_matches(".csv"));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("work-hours.csv").to_str().unwrap().to_string()
     }
 
     #[test]
@@ -1517,6 +1746,110 @@ mod tests {
             )
             .to_string(),
             "2026-10-09"
+        );
+    }
+
+    #[test]
+    fn parse_segments_pairs_on_off_including_blips() {
+        let log = "2026-10-10 05:26:00 -0500 Notification  \tDisplay is turned on\n\
+                   2026-10-10 05:26:20 -0500 Notification  \tDisplay is turned off\n\
+                   2026-10-10 09:00:00 -0500 Notification  \tDisplay is turned on\n\
+                   2026-10-10 17:00:00 -0500 Notification  \tDisplay is turned off\n";
+        let segs = parse_segments_from_log(log);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(fmt_dt(segs[0].started_at), "2026-10-10 05:26:00");
+        assert_eq!(segs[0].ended_at.map(fmt_dt).as_deref(), Some("2026-10-10 05:26:20"));
+        assert_eq!(fmt_dt(segs[1].started_at), "2026-10-10 09:00:00");
+        assert_eq!(segs[1].ended_at.map(fmt_dt).as_deref(), Some("2026-10-10 17:00:00"));
+    }
+
+    #[test]
+    fn segments_survive_log_rolloff_and_rule_change() {
+        let path = tmp_csv("wht_seg_persist.csv");
+        std::fs::write(
+            &path,
+            "date,start,stop,subtract_manual_minutes,subtract_auto_minutes,hours_worked\n",
+        )
+        .unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 10, 7).unwrap();
+        let log = "2026-10-06 05:26:00 -0500 Notification  \tDisplay is turned on\n\
+                   2026-10-06 05:26:20 -0500 Notification  \tDisplay is turned off\n\
+                   2026-10-06 09:00:00 -0500 Notification  \tDisplay is turned on\n\
+                   2026-10-06 11:00:00 -0500 Notification  \tDisplay is turned off\n";
+        let rows = backfill_impl(&path, false, None, log, today, 4, 10).unwrap();
+        let by: BTreeMap<String, &DayEntry> = rows.iter().map(|e| (e.date.clone(), e)).collect();
+        assert_eq!(by["2026-10-06"].start, "09:00:00");
+        assert_eq!(by["2026-10-06"].stop, "11:00:00");
+        assert_eq!(by["2026-10-06"].hours_worked, 2.0);
+
+        let rows2 = backfill_impl(&path, false, None, "", today, 4, 10).unwrap();
+        let by2: BTreeMap<String, &DayEntry> = rows2.iter().map(|e| (e.date.clone(), e)).collect();
+        assert_eq!(by2["2026-10-06"].start, "09:00:00");
+        assert_eq!(by2["2026-10-06"].hours_worked, 2.0);
+
+        let rows3 = backfill_impl(&path, false, None, "", today, 4, 180).unwrap();
+        let by3: BTreeMap<String, &DayEntry> = rows3.iter().map(|e| (e.date.clone(), e)).collect();
+        assert_eq!(by3["2026-10-06"].start, "");
+        assert_eq!(by3["2026-10-06"].hours_worked, 0.0);
+
+        let segs = load_segments(&segments_path(&path));
+        assert_eq!(segs.len(), 2);
+        let _ = std::fs::remove_dir_all(Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn segments_merge_keeps_rows_no_longer_in_log() {
+        let path = tmp_csv("wht_seg_merge.csv");
+        std::fs::write(
+            &path,
+            "date,start,stop,subtract_manual_minutes,subtract_auto_minutes,hours_worked\n",
+        )
+        .unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 10, 7).unwrap();
+        let log1 = day_log("2026-10-05", "09:00:00", "17:00:00", None, "17:00:01");
+        backfill_impl(&path, false, None, &log1, today, 4, 10).unwrap();
+        let log2 = day_log("2026-10-07", "10:00:00", "12:00:00", None, "12:00:01");
+        backfill_impl(&path, false, None, &log2, today, 4, 10).unwrap();
+        let segs = load_segments(&segments_path(&path));
+        assert!(segs.contains_key("2026-10-05 09:00:00"));
+        assert!(segs.contains_key("2026-10-07 10:00:00"));
+        let rows = load_entries_from_csv(&path);
+        assert_eq!(rows["2026-10-05"].hours_worked, 8.0);
+        assert_eq!(rows["2026-10-07"].hours_worked, 2.0);
+        let _ = std::fs::remove_dir_all(Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn merge_closes_open_segment_without_dropping_it() {
+        let mut map = BTreeMap::new();
+        merge_segments(
+            &mut map,
+            vec![Segment {
+                started_at: parse_dt("2026-10-06 09:00:00").unwrap(),
+                ended_at: None,
+            }],
+        );
+        merge_segments(
+            &mut map,
+            vec![Segment {
+                started_at: parse_dt("2026-10-06 09:00:00").unwrap(),
+                ended_at: parse_dt("2026-10-06 17:00:00"),
+            }],
+        );
+        assert_eq!(
+            map["2026-10-06 09:00:00"].ended_at.map(fmt_dt).as_deref(),
+            Some("2026-10-06 17:00:00")
+        );
+        merge_segments(
+            &mut map,
+            vec![Segment {
+                started_at: parse_dt("2026-10-06 09:00:00").unwrap(),
+                ended_at: None,
+            }],
+        );
+        assert_eq!(
+            map["2026-10-06 09:00:00"].ended_at.map(fmt_dt).as_deref(),
+            Some("2026-10-06 17:00:00")
         );
     }
 
