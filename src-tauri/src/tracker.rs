@@ -43,6 +43,10 @@ pub struct DayEntry {
     pub start_manual: bool,
     #[serde(default)]
     pub stop_manual: bool,
+    #[serde(default)]
+    pub auto_start: String,
+    #[serde(default)]
+    pub auto_stop: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -608,6 +612,8 @@ pub fn load_entries_from_csv(path: &str) -> BTreeMap<String, DayEntry> {
                     .and_then(|i| r.get(i))
                     .map(parse_flag)
                     .unwrap_or(false),
+                auto_start: String::new(),
+                auto_stop: String::new(),
             },
         );
     }
@@ -774,7 +780,107 @@ fn entry_from_override(date: String, o: &DayOverride) -> DayEntry {
         hours_worked: hours,
         start_manual: !o.start.is_empty(),
         stop_manual: !o.stop.is_empty(),
+        auto_start: String::new(),
+        auto_stop: String::new(),
     }
+}
+
+fn build_day_entry(
+    date: String,
+    computed_s: String,
+    computed_e: String,
+    ov: Option<&DayOverride>,
+    prev: Option<&DayEntry>,
+    use_auto: bool,
+) -> DayEntry {
+    if ov.map(|o| o.hours.is_some()).unwrap_or(false) {
+        let mut e = entry_from_override(date, ov.unwrap());
+        e.auto_start = computed_s;
+        e.auto_stop = computed_e;
+        return e;
+    }
+    let start_manual = ov.map(|o| !o.start.is_empty()).unwrap_or(false);
+    let stop_manual = ov.map(|o| !o.stop.is_empty()).unwrap_or(false);
+    let s = if start_manual {
+        ov.map(|o| o.start.clone())
+            .unwrap_or_else(|| computed_s.clone())
+    } else {
+        computed_s.clone()
+    };
+    let e = if stop_manual {
+        ov.map(|o| o.stop.clone())
+            .unwrap_or_else(|| computed_e.clone())
+    } else {
+        computed_e.clone()
+    };
+    let man = ov
+        .and_then(|o| o.subtract_minutes)
+        .or_else(|| prev.and_then(|p| p.subtract_manual_minutes))
+        .or(Some(0));
+    let hours = if s.is_empty() || e.is_empty() {
+        0.0
+    } else {
+        let _ = use_auto;
+        net_hours(&s, &e, man)
+    };
+    DayEntry {
+        date,
+        start: s,
+        stop: e,
+        subtract_manual_minutes: man,
+        subtract_auto_minutes: None,
+        hours_worked: hours,
+        start_manual,
+        stop_manual,
+        auto_start: computed_s,
+        auto_stop: computed_e,
+    }
+}
+
+pub fn rematerialize_day(
+    csv_path: &str,
+    date: &str,
+    day_start_hour: u32,
+    min_session_minutes: u32,
+) -> Result<DayEntry, String> {
+    let mut map = load_entries_from_csv(csv_path);
+    let overrides = load_overrides(&overrides_path(csv_path));
+    let segs = load_segments(&segments_path(csv_path));
+    let d = NaiveDate::parse_from_str(date, "%Y-%m-%d")
+        .map_err(|_| format!("bad date {date}"))?;
+    let today = logical_today(day_start_hour);
+    let now_dt = if d == today {
+        Some(Local::now().naive_local())
+    } else {
+        None
+    };
+    let by_day = group_segments_by_day(&segs, day_start_hour);
+    let day_segs = by_day.get(date).map(|v| v.as_slice()).unwrap_or(&[]);
+    let (computed_s, computed_e) = if !day_segs.is_empty() {
+        let (start, stop) = day_from_segments(day_segs, min_session_minutes, now_dt);
+        (start.unwrap_or_default(), stop.unwrap_or_default())
+    } else {
+        (
+            map.get(date)
+                .map(|e| e.auto_start.clone())
+                .unwrap_or_default(),
+            map.get(date)
+                .map(|e| e.auto_stop.clone())
+                .unwrap_or_default(),
+        )
+    };
+    let prev = map.get(date).cloned();
+    let entry = build_day_entry(
+        date.to_string(),
+        computed_s,
+        computed_e,
+        overrides.get(date),
+        prev.as_ref(),
+        false,
+    );
+    map.insert(date.to_string(), entry.clone());
+    write_entries_to_csv(csv_path, &map)?;
+    Ok(entry)
 }
 
 pub fn parse_segments_from_log(log: &str) -> Vec<Segment> {
@@ -960,6 +1066,8 @@ fn zero_row(date: String) -> DayEntry {
         hours_worked: 0.0,
         start_manual: false,
         stop_manual: false,
+        auto_start: String::new(),
+        auto_stop: String::new(),
     }
 }
 
@@ -1020,16 +1128,6 @@ pub fn backfill_impl(
 
     while d <= today_d {
         let ds = d.to_string();
-        if overrides.get(&ds).map(|o| o.hours.is_some()).unwrap_or(false) {
-            if let Some(o) = overrides.get(&ds) {
-                map.insert(ds.clone(), entry_from_override(ds.clone(), o));
-            }
-            d = d.succ_opt().unwrap_or(today_d);
-            if d > today_d {
-                break;
-            }
-            continue;
-        }
         let prev = map.get(&ds).cloned();
         let now_dt = if ds == today_s {
             Some(Local::now().naive_local())
@@ -1045,49 +1143,43 @@ pub fn backfill_impl(
             let (start, stop) = parse_day(log, &ds, day_start_hour, min_session_minutes, now);
             (start.unwrap_or_default(), stop.unwrap_or_default())
         } else {
+            (String::new(), String::new())
+        };
+        if overrides.get(&ds).map(|o| o.hours.is_some()).unwrap_or(false) {
+            map.insert(
+                ds.clone(),
+                build_day_entry(
+                    ds.clone(),
+                    computed_s,
+                    computed_e,
+                    overrides.get(&ds),
+                    prev.as_ref(),
+                    use_auto,
+                ),
+            );
             d = d.succ_opt().unwrap_or(today_d);
             if d > today_d {
                 break;
             }
             continue;
-        };
-        let ov = overrides.get(&ds);
-        let start_manual = ov.map(|o| !o.start.is_empty()).unwrap_or(false);
-        let stop_manual = ov.map(|o| !o.stop.is_empty()).unwrap_or(false);
-        let s = if start_manual {
-            ov.map(|o| o.start.clone()).unwrap_or(computed_s)
-        } else {
-            computed_s
-        };
-        let e = if stop_manual {
-            ov.map(|o| o.stop.clone()).unwrap_or(computed_e)
-        } else {
-            computed_e
-        };
-        let man = ov
-            .and_then(|o| o.subtract_minutes)
-            .or_else(|| prev.as_ref().and_then(|p| p.subtract_manual_minutes))
-            .or(Some(0));
-        let hours = if s.is_empty() && e.is_empty() {
-            0.0
-        } else if e.is_empty() {
-            0.0
-        } else {
-            let _ = use_auto;
-            net_hours(&s, &e, man)
-        };
+        }
+        if day_segs.is_empty() && d < log_start_d {
+            d = d.succ_opt().unwrap_or(today_d);
+            if d > today_d {
+                break;
+            }
+            continue;
+        }
         map.insert(
             ds.clone(),
-            DayEntry {
-                date: ds,
-                start: s,
-                stop: e,
-                subtract_manual_minutes: man,
-                subtract_auto_minutes: None,
-                hours_worked: hours,
-                start_manual,
-                stop_manual,
-            },
+            build_day_entry(
+                ds.clone(),
+                computed_s,
+                computed_e,
+                overrides.get(&ds),
+                prev.as_ref(),
+                use_auto,
+            ),
         );
         d = d.succ_opt().unwrap_or(today_d);
         if d > today_d {
@@ -1273,12 +1365,8 @@ pub fn set_day_fields(
         overrides.remove(date);
     }
     write_overrides(&ov_path, &overrides)?;
-    let rows = backfill(csv_path, false, epoch, day_start_hour, min_session_minutes)?;
-    if let Some(e) = rows.into_iter().find(|r| r.date == date) {
-        return Ok(e);
-    }
-    let map = load_entries_from_csv(csv_path);
-    map.get(date).cloned().ok_or_else(|| format!("no row for {date}"))
+    let _ = epoch;
+    rematerialize_day(csv_path, date, day_start_hour, min_session_minutes)
 }
 
 #[derive(Debug, Clone)]
@@ -1489,6 +1577,8 @@ pub fn apply_import(
                         hours_worked: row.hours,
                         start_manual: !row.start.is_empty(),
                         stop_manual: !row.stop.is_empty(),
+                        auto_start: String::new(),
+                        auto_stop: String::new(),
                     },
                 );
                 imported += 1;
@@ -1783,6 +1873,8 @@ mod tests {
                 hours_worked: 1.07,
                 start_manual: false,
                 stop_manual: false,
+                auto_start: String::new(),
+                auto_stop: String::new(),
             },
         );
         // upload provides hours + manual only: auto + start/stop preserved
@@ -2153,8 +2245,14 @@ mod tests {
             .unwrap();
         assert_eq!(e.start, "10:00:00");
         assert!(e.start_manual);
+        assert_eq!(e.auto_start, "09:00:00");
+        assert_eq!(e.auto_stop, "17:00:00");
         assert_eq!(e.subtract_manual_minutes, Some(30));
         assert_eq!(e.hours_worked, 6.5);
+        let e2 = set_day_fields(&path, None, 4, 10, "2026-10-06", Some("11:00:00".into()), None, None)
+            .unwrap();
+        assert_eq!(e2.start, "11:00:00");
+        assert_eq!(e2.auto_start, "09:00:00");
         let _ = std::fs::remove_dir_all(Path::new(&path).parent().unwrap());
     }
 

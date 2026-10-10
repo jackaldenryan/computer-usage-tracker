@@ -257,9 +257,10 @@ function fmtClock(t) {
 
 async function load() {
   try {
-    entries = await invoke("get_entries");
-    today = await invoke("get_today");
-    settings = await invoke("get_settings");
+    const snap = await invoke("get_state");
+    entries = snap.entries;
+    today = snap.today;
+    settings = snap.settings;
   } catch (e) {
     console.error(e);
     return;
@@ -520,7 +521,7 @@ function showTip(it, ev, grouped) {
   placeTip(ev);
 }
 
-function renderAll() {
+function renderAll(opts) {
   hideTip();
   const { title, items, grouped } = barData();
   const groupedTime = grouped && chartMetric !== "hours";
@@ -601,7 +602,7 @@ function renderAll() {
     : "n/a";
   $("daysN").textContent = String(allDays.length);
   const ae = document.activeElement;
-  if (ae && (ae.closest("#rows") || ae.id === "todaySubtract")) return;
+  if (opts?.skipTable || (ae && (ae.closest("#rows") || ae.id === "todaySubtract"))) return;
   const tb = $("rows");
   tb.innerHTML = "";
   if (!grouped) {
@@ -646,10 +647,41 @@ function editCell(value, placeholder, isManual) {
   inp.placeholder = placeholder;
   if (isManual) inp.classList.add("manual");
   const tag = document.createElement("span");
-  tag.className = "manual-tag" + (isManual ? "" : " hidden");
-  tag.textContent = "manual";
+  tag.className = "src-tag " + (isManual ? "manual" : "auto");
+  tag.textContent = isManual ? "manual" : "auto";
   wrap.append(inp, tag);
   return { wrap, inp, tag };
+}
+function setSrc(inp, tag, isManual) {
+  inp.classList.toggle("manual", !!isManual);
+  tag.className = "src-tag " + (isManual ? "manual" : "auto");
+  tag.textContent = isManual ? "manual" : "auto";
+}
+function attachAutoTip(wrap, autoRaw, date, field) {
+  if (!autoRaw) return;
+  const tip = document.createElement("div");
+  tip.className = "auto-tip";
+  const inner = document.createElement("div");
+  inner.className = "auto-tip-inner";
+  inner.append(`Auto: ${fmtClock(autoRaw)} `);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = "Use auto";
+  btn.addEventListener("mousedown", (ev) => ev.preventDefault());
+  btn.addEventListener("click", async () => {
+    try { await saveFields(date, { [field]: autoRaw }); } catch (err) { console.error(err); }
+  });
+  inner.append(btn);
+  tip.append(inner);
+  wrap.append(tip);
+  let hideT = 0;
+  wrap.addEventListener("pointerenter", () => {
+    clearTimeout(hideT);
+    wrap.classList.add("tip-open");
+  });
+  wrap.addEventListener("pointerleave", () => {
+    hideT = setTimeout(() => wrap.classList.remove("tip-open"), 250);
+  });
 }
 async function saveFields(date, patch) {
   const updated = await invoke("set_day_fields", {
@@ -658,17 +690,19 @@ async function saveFields(date, patch) {
     stop: patch.stop ?? null,
     minutes: patch.minutes ?? null,
   });
-  const i = entries.findIndex((e) => e.date === date);
-  if (i >= 0) entries[i] = updated;
+  const i = entries.findIndex((row) => row.date === date);
+  if (i >= 0) Object.assign(entries[i], updated);
   else entries.push(updated);
   if (today && today.date === date) today = await invoke("get_today");
   const tr = document.querySelector(`tr[data-date="${date}"]`);
-  if (tr) {
+  const ae = document.activeElement;
+  if (tr && !(ae && tr.contains(ae))) tr.replaceWith(rowEl(updated));
+  else if (tr) {
     const h = tr.querySelector(".hours-cell");
     if (h) h.textContent = fmtH(hoursFor(updated, date));
   }
   renderToday();
-  renderAll();
+  renderAll({ skipTable: true });
   $("saveMsg").textContent = `Saved ${date}`;
   setTimeout(() => { if ($("saveMsg").textContent === `Saved ${date}`) $("saveMsg").textContent = ""; }, 2000);
   return updated;
@@ -682,36 +716,38 @@ function rowEl(e) {
   const startShow = e.start ? fmtClock(e.start) : "";
   const stopShow = e.stop ? fmtClock(e.stop) : (e.date === today?.date && today?.is_running ? "running…" : "");
   const startCell = editCell(startShow, "auto", !!e.start_manual);
+  if (e.start_manual) attachAutoTip(startCell.wrap, e.auto_start, e.date, "start");
   bindCommit(startCell.inp, async () => {
     const parsed = parseTimeInput(startCell.inp.value);
     if (parsed == null) { startCell.inp.value = startShow; return; }
+    if (parsed === (e.start || "")) return;
     try {
       const u = await saveFields(e.date, { start: parsed });
       startCell.inp.value = u.start ? fmtClock(u.start) : "";
-      startCell.inp.classList.toggle("manual", !!u.start_manual);
-      startCell.tag.classList.toggle("hidden", !u.start_manual);
+      setSrc(startCell.inp, startCell.tag, !!u.start_manual);
     } catch (err) { console.error(err); }
   });
   const stopCell = editCell(stopShow === "running…" ? "" : stopShow, e.date === today?.date && today?.is_running ? "running…" : "auto", !!e.stop_manual);
+  if (e.stop_manual) attachAutoTip(stopCell.wrap, e.auto_stop, e.date, "stop");
   bindCommit(stopCell.inp, async () => {
     const parsed = parseTimeInput(stopCell.inp.value);
     if (parsed == null) { stopCell.inp.value = stopShow === "running…" ? "" : stopShow; return; }
+    if (parsed === (e.stop || "")) return;
     try {
       const u = await saveFields(e.date, { stop: parsed });
       stopCell.inp.value = u.stop ? fmtClock(u.stop) : "";
-      stopCell.inp.classList.toggle("manual", !!u.stop_manual);
-      stopCell.tag.classList.toggle("hidden", !u.stop_manual);
+      setSrc(stopCell.inp, stopCell.tag, !!u.stop_manual);
     } catch (err) { console.error(err); }
   });
   const subCell = editCell(String(e.subtract_manual_minutes ?? 0), "0", (e.subtract_manual_minutes ?? 0) !== 0);
   bindCommit(subCell.inp, async () => {
     const mins = parseMinutesInput(subCell.inp.value);
     if (mins == null) { subCell.inp.value = String(e.subtract_manual_minutes ?? 0); return; }
+    if (mins === (e.subtract_manual_minutes ?? 0)) return;
     try {
       const u = await saveFields(e.date, { minutes: mins });
       subCell.inp.value = String(u.subtract_manual_minutes ?? 0);
-      subCell.inp.classList.toggle("manual", (u.subtract_manual_minutes ?? 0) !== 0);
-      subCell.tag.classList.toggle("hidden", (u.subtract_manual_minutes ?? 0) === 0);
+      setSrc(subCell.inp, subCell.tag, (u.subtract_manual_minutes ?? 0) !== 0);
     } catch (err) { console.error(err); }
   });
   const td1 = document.createElement("td"); td1.append(startCell.wrap);
@@ -911,11 +947,7 @@ $("use24hToggle").addEventListener("change", async (ev) => {
 
 $("refreshBtn").addEventListener("click", async () => {
   try {
-    entries = await invoke("refresh");
-    today = await invoke("get_today");
-    settings = await invoke("get_settings");
-    renderToday();
-    renderAll();
+    await load();
   } catch (e) {
     console.error(e);
   }

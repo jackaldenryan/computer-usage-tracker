@@ -25,16 +25,43 @@ fn epoch_of(st: &tracker::Settings) -> Option<&str> {
     st.background_epoch.as_deref()
 }
 
+#[derive(serde::Serialize)]
+struct AppState {
+    entries: Vec<tracker::DayEntry>,
+    today: tracker::TodayInfo,
+    settings: tracker::Settings,
+}
+
+fn snapshot_from(
+    st: tracker::Settings,
+    entries: Vec<tracker::DayEntry>,
+) -> AppState {
+    let today_d = tracker::logical_today(st.day_start_hour);
+    let now_str = chrono::Local::now().format("%H:%M:%S").to_string();
+    let today = tracker::today_info(&entries, st.use_auto_subtract, today_d, &now_str);
+    AppState {
+        entries,
+        today,
+        settings: st,
+    }
+}
+
 #[tauri::command]
-fn get_entries(app: tauri::AppHandle) -> Result<Vec<tracker::DayEntry>, String> {
+fn get_state(app: tauri::AppHandle) -> Result<AppState, String> {
     let st = load_settings(&app);
-    tracker::backfill(
+    let entries = tracker::backfill(
         &st.csv_path,
         st.use_auto_subtract,
         epoch_of(&st),
         st.day_start_hour,
         st.min_session_minutes,
-    )
+    )?;
+    Ok(snapshot_from(st, entries))
+}
+
+#[tauri::command]
+fn get_entries(app: tauri::AppHandle) -> Result<Vec<tracker::DayEntry>, String> {
+    Ok(get_state(app)?.entries)
 }
 
 #[tauri::command]
@@ -45,13 +72,8 @@ fn get_settings(app: tauri::AppHandle) -> tracker::Settings {
 #[tauri::command]
 fn get_today(app: tauri::AppHandle) -> Result<tracker::TodayInfo, String> {
     let st = load_settings(&app);
-    let entries = tracker::backfill(
-        &st.csv_path,
-        st.use_auto_subtract,
-        epoch_of(&st),
-        st.day_start_hour,
-        st.min_session_minutes,
-    )?;
+    let map = tracker::load_entries_from_csv(&st.csv_path);
+    let entries: Vec<_> = map.into_values().collect();
     let today = tracker::logical_today(st.day_start_hour);
     let now_str = chrono::Local::now().format("%H:%M:%S").to_string();
     Ok(tracker::today_info(
@@ -274,6 +296,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_state,
             get_entries,
             get_today,
             get_settings,

@@ -11,6 +11,18 @@
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
+* {
+  scrollbar-width: auto;
+  scrollbar-color: #c5cdd8 #252b36;
+}
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: #252b36; }
+::-webkit-scrollbar-thumb {
+  background: #c5cdd8;
+  border-radius: 8px;
+  border: 2px solid #252b36;
+}
+::-webkit-scrollbar-thumb:hover { background: #e8ecf1; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
@@ -44,10 +56,50 @@ input[type="text"] {
 table input[type="text"] {
   width: 100%; min-width: 92px; height: 36px; font-size: 16px;
 }
-table input.manual { border-color: var(--accent); }
-.cell-edit { display: flex; align-items: center; gap: 6px; }
-.manual-tag { font-size: 10px; color: var(--accent); font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; }
-.manual-tag.hidden { display: none; }
+table input.manual {
+  border-color: #60a5fa;
+  background: #1a2744;
+  color: #dbeafe;
+}
+.cell-edit { display: flex; align-items: center; gap: 6px; position: relative; }
+.cell-edit:hover, .cell-edit.tip-open { z-index: 80; }
+.src-tag { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; }
+.src-tag.manual { color: #60a5fa; }
+.src-tag.auto { color: var(--muted); }
+.auto-tip {
+  display: none;
+  position: absolute;
+  z-index: 80;
+  left: 0;
+  top: 100%;
+  padding-top: 8px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  white-space: nowrap;
+}
+.cell-edit:hover .auto-tip,
+.cell-edit.tip-open .auto-tip { display: block; }
+.auto-tip-inner {
+  background: #1e2430;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text);
+  box-shadow: 0 8px 24px #0008;
+}
+.auto-tip button {
+  margin-left: 8px;
+  background: #1a2744;
+  border: 1px solid #60a5fa;
+  color: #dbeafe;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
 .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
 .save-msg { font-size: 12px; color: var(--accent); min-height: 16px; margin-top: 4px; }
 .controls { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; margin: 0 0 12px; }
