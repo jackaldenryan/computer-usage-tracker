@@ -10,11 +10,13 @@
   --future: #222834;
 }
 * { box-sizing: border-box; }
+html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, sans-serif;
+  overflow: hidden;
 }
-#app { max-width: 1020px; margin: 0 auto; padding: 24px; }
+#app { max-width: min(1020px, 100%); height: 100%; margin: 0 auto; padding: clamp(10px, 2vw, 24px); overflow: auto; }
 .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
 .topbar h1 { margin: 0; font-size: 24px; }
 .sub { color: var(--muted); margin: 4px 0 0; font-size: 13px; }
@@ -29,7 +31,7 @@ body {
   border-radius: 14px; padding: 18px; margin-bottom: 16px;
 }
 .label { font-size: 11px; letter-spacing: 0.08em; color: var(--muted); font-weight: 700; }
-.today-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; align-items: start; }
+.today-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; align-items: start; }
 .today-date { font-size: 18px; font-weight: 700; margin-top: 4px; }
 .today-range { color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .today-hours { font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; }
@@ -47,6 +49,10 @@ input[type="number"] {
 }
 .tab.active { background: var(--text); color: #111; border-color: var(--text); }
 .chart-layout { display: flex; gap: 20px; align-items: stretch; }
+@media (max-width: 820px) {
+  .chart-layout { flex-direction: column; }
+  .stats { flex: 1 1 auto; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); padding: 0 0 12px; }
+}
 .stats {
   display: flex; flex-direction: column; gap: 14px;
   flex: 0 0 176px; margin: 0; padding: 4px 16px 4px 0;
@@ -135,7 +141,7 @@ table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nu
 th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); font-size: 14px; }
 th { color: var(--muted); font-size: 12px; }
 td input { width: 90px; padding: 6px 8px; font-size: 14px; }
-.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 12px; overflow: auto; }
 .modal.hidden { display: none; }
 .update-toast {
   position: fixed; right: 16px; bottom: 16px; z-index: 30;
@@ -148,7 +154,11 @@ td input { width: 90px; padding: 6px 8px; font-size: 14px; }
 .update-toast p { margin: 0 0 8px; }
 .update-toast .modal-actions { margin-bottom: 10px; }
 .update-toast .hidden { display: none; }
-.modal-box { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; width: 560px; max-width: 92vw; }
+.modal-box { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; width: min(560px, 100%); max-height: min(90vh, 800px); overflow-y: auto; }
+select {
+  width: 160px; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: #0f141b; color: var(--text); font-size: 16px;
+}
 .csv-row { margin: 8px 0 12px; word-break: break-all; }
 .modal-actions { display: flex; gap: 8px; }
 h2 { margin: 0 0 10px; font-size: 16px; }

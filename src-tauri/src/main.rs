@@ -1,9 +1,8 @@
 mod tracker;
 
-use chrono::Local;
 use std::path::PathBuf;
 use tauri::path::BaseDirectory;
-use tauri::Manager;
+use tauri::{LogicalSize, Manager};
 
 fn settings_path(app: &tauri::AppHandle) -> PathBuf {
     let dir = app
@@ -29,7 +28,12 @@ fn epoch_of(st: &tracker::Settings) -> Option<&str> {
 #[tauri::command]
 fn get_entries(app: tauri::AppHandle) -> Result<Vec<tracker::DayEntry>, String> {
     let st = load_settings(&app);
-    tracker::backfill(&st.csv_path, st.use_auto_subtract, epoch_of(&st))
+    tracker::backfill(
+        &st.csv_path,
+        st.use_auto_subtract,
+        epoch_of(&st),
+        st.day_start_hour,
+    )
 }
 
 #[tauri::command]
@@ -40,9 +44,14 @@ fn get_settings(app: tauri::AppHandle) -> tracker::Settings {
 #[tauri::command]
 fn get_today(app: tauri::AppHandle) -> Result<tracker::TodayInfo, String> {
     let st = load_settings(&app);
-    let entries = tracker::backfill(&st.csv_path, st.use_auto_subtract, epoch_of(&st))?;
-    let today = Local::now().date_naive();
-    let now_str = Local::now().format("%H:%M:%S").to_string();
+    let entries = tracker::backfill(
+        &st.csv_path,
+        st.use_auto_subtract,
+        epoch_of(&st),
+        st.day_start_hour,
+    )?;
+    let today = tracker::logical_today(st.day_start_hour);
+    let now_str = chrono::Local::now().format("%H:%M:%S").to_string();
     Ok(tracker::today_info(
         &entries,
         st.use_auto_subtract,
@@ -63,6 +72,7 @@ fn set_subtract(
         &st.csv_path,
         st.use_auto_subtract,
         epoch_of(&st),
+        st.day_start_hour,
         &date,
         minutes,
     )
@@ -85,9 +95,30 @@ fn set_use_24h(app: tauri::AppHandle, use_24h: bool) -> tracker::Settings {
 }
 
 #[tauri::command]
+fn set_day_start_hour(
+    app: tauri::AppHandle,
+    hour: u32,
+) -> Result<Vec<tracker::DayEntry>, String> {
+    let mut st = load_settings(&app);
+    st.day_start_hour = tracker::clamp_day_start_hour(hour);
+    save_settings(&app, &st);
+    tracker::backfill(
+        &st.csv_path,
+        st.use_auto_subtract,
+        epoch_of(&st),
+        st.day_start_hour,
+    )
+}
+
+#[tauri::command]
 fn refresh(app: tauri::AppHandle) -> Result<Vec<tracker::DayEntry>, String> {
     let st = load_settings(&app);
-    tracker::backfill(&st.csv_path, st.use_auto_subtract, epoch_of(&st))
+    tracker::backfill(
+        &st.csv_path,
+        st.use_auto_subtract,
+        epoch_of(&st),
+        st.day_start_hour,
+    )
 }
 
 #[tauri::command]
@@ -169,12 +200,37 @@ fn uninstall_background_job(app: tauri::AppHandle) -> Result<tracker::Background
     ))
 }
 
+fn fit_main_window(app: &tauri::App) {
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(Some(m)) = win.current_monitor() else {
+        return;
+    };
+    let scale = m.scale_factor();
+    let work = m.work_area();
+    let avail_w = (work.size.width as f64 / scale).max(480.0);
+    let avail_h = (work.size.height as f64 / scale).max(360.0);
+    let w = (avail_w * 0.88).min(1200.0).min(avail_w - 24.0).max(560.0_f64.min(avail_w - 16.0));
+    let h = (avail_h * 0.88).min(860.0).min(avail_h - 24.0).max(420.0_f64.min(avail_h - 16.0));
+    let _ = win.set_min_size(Some(LogicalSize::new(
+        560.0_f64.min(w),
+        420.0_f64.min(h),
+    )));
+    let _ = win.set_size(LogicalSize::new(w, h));
+    let _ = win.center();
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            fit_main_window(app);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_entries,
             get_today,
@@ -182,6 +238,7 @@ pub fn run() {
             set_subtract,
             set_use_auto,
             set_use_24h,
+            set_day_start_hour,
             refresh,
             get_csv_path,
             import_backfill_csv,

@@ -6,7 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 
 let entries = [];
 let today = null;
-let settings = { csv_path: "", use_auto_subtract: false, use_24h: false };
+let settings = { csv_path: "", use_auto_subtract: false, use_24h: false, day_start_hour: 4 };
 let view = "week";
 // Custom range — same functionality as cursor-cost-tracking's RangePicker:
 // preset buttons (to-date + rolling) plus a calendar for arbitrary ranges.
@@ -50,8 +50,19 @@ const PRESET_LABELS = {
   all: "All time",
 };
 
+function logicalNow() {
+  const d = new Date();
+  const start = settings.day_start_hour ?? 4;
+  if (d.getHours() < start) d.setDate(d.getDate() - 1);
+  d.setHours(12, 0, 0, 0);
+  return d;
+}
+function logicalTodayStr() {
+  return today?.date || fmtLocal(logicalNow());
+}
+
 function applyPresetRange(id) {
-  const now = new Date();
+  const now = logicalNow();
   const todayStr = fmtLocal(now);
   let s = todayStr;
   if (id === "wtd") s = fmtLocal(mondayOf(now));
@@ -112,10 +123,19 @@ function timeToSec(t) {
   return p[0] * 3600 + p[1] * 60 + (p[2] || 0);
 }
 function secToHm(sec) {
-  const s = Math.round(sec);
+  const s = ((Math.round(sec) % 86400) + 86400) % 86400;
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+function timeToDaySec(t) {
+  const sec = timeToSec(t);
+  if (sec == null) return null;
+  const start = (settings.day_start_hour ?? 4) * 3600;
+  return sec >= start ? sec - start : sec + 86400 - start;
+}
+function daySecToClock(sec) {
+  return secToHm(sec + (settings.day_start_hour ?? 4) * 3600);
 }
 function fmtClock(t) {
   if (!t || t === "—" || t === "running…") return t || "—";
@@ -152,7 +172,7 @@ function byDate() {
 }
 
 function weekDays() {
-  const mon = mondayOf(new Date());
+  const mon = mondayOf(logicalNow());
   const out = [];
   for (let i = 0; i < 7; i++) {
     const d = new Date(mon);
@@ -163,7 +183,7 @@ function weekDays() {
 }
 
 function monthDays() {
-  const now = new Date();
+  const now = logicalNow();
   const out = [];
   const y = now.getFullYear(), m = now.getMonth();
   const n = new Date(y, m + 1, 0).getDate();
@@ -182,8 +202,8 @@ function dayItem(d, m, todayStr) {
 
 function lastNWeeks(n) {
   const m = byDate();
-  const todayStr = fmtLocal(new Date());
-  const cur = mondayOf(new Date());
+  const todayStr = logicalTodayStr();
+  const cur = mondayOf(logicalNow());
   const out = [];
   for (let i = n - 1; i >= 0; i--) {
     const mon = new Date(cur);
@@ -238,8 +258,8 @@ function groupWeeks(startStr, endStr, m, todayStr) {
 
 function lastNMonths(n) {
   const m = byDate();
-  const todayStr = fmtLocal(new Date());
-  const now = new Date();
+  const todayStr = logicalTodayStr();
+  const now = logicalNow();
   const out = [];
   for (let i = n - 1; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -275,10 +295,28 @@ function renderToday() {
   $("modeBadge").textContent = settings.use_auto_subtract ? "stats: auto" : "stats: manual";
 }
 
+function hourLabel(h) {
+  if (settings.use_24h) return `${String(h).padStart(2, "0")}:00`;
+  const ap = h >= 12 ? "PM" : "AM";
+  let x = h % 12;
+  if (x === 0) x = 12;
+  return `${x}:00 ${ap}`;
+}
+
 function renderSettings() {
   $("csvPath").textContent = settings.csv_path || "—";
   $("useAutoToggle").checked = !!settings.use_auto_subtract;
   $("use24hToggle").checked = !!settings.use_24h;
+  const sel = $("dayStartHour");
+  const cur = settings.day_start_hour ?? 4;
+  sel.innerHTML = "";
+  for (let h = 0; h < 24; h++) {
+    const o = document.createElement("option");
+    o.value = String(h);
+    o.textContent = hourLabel(h);
+    if (h === cur) o.selected = true;
+    sel.append(o);
+  }
   $("bgMsg").textContent = "";
   refreshBgStatus();
 }
@@ -330,8 +368,8 @@ function eachDate(start, end, todayStr) {
 }
 
 function viewDayKeys() {
-  const todayStr = fmtLocal(new Date());
-  const now = new Date();
+  const todayStr = logicalTodayStr();
+  const now = logicalNow();
   if (view === "week") return weekDays().map(fmtLocal).filter((k) => k <= todayStr);
   if (view === "month") return monthDays().map(fmtLocal).filter((k) => k <= todayStr);
   if (view === "byweek") {
@@ -356,7 +394,7 @@ function viewDayKeys() {
 
 function barData() {
   const m = byDate();
-  const todayStr = fmtLocal(new Date());
+  const todayStr = logicalTodayStr();
   if (view === "week") {
     return {
       title: "This week (Mon–Sun)",
@@ -379,7 +417,7 @@ function barData() {
     };
   }
   if (view === "custom") {
-    const todayStr2 = fmtLocal(new Date());
+    const todayStr2 = logicalTodayStr();
     let sStr = customPreset === "all" ? earliestEntryDate() || todayStr2 : customStart;
     let s = parseLocalDate(sStr);
     let e = parseLocalDate(customEnd);
@@ -439,7 +477,7 @@ function renderAll() {
     chart.append(col);
   }
   const m = byDate();
-  const todayStr = today?.date || fmtLocal(new Date());
+  const todayStr = logicalTodayStr();
   const dayKeys = viewDayKeys();
   const allDays = [];
   const worked = [];
@@ -457,13 +495,13 @@ function renderAll() {
   $("avgH").textContent = allDays.length ? (total / allDays.length).toFixed(2) + "h" : "n/a";
   $("avgWorkedH").textContent = meanH(worked);
   $("avgWorkedExclH").textContent = meanH(workedExcl);
-  const starts = worked.map((d) => timeToSec(d.e.start)).filter((x) => x != null);
-  const stops = worked.map((d) => timeToSec(d.e.stop)).filter((x) => x != null);
+  const starts = worked.map((d) => timeToDaySec(d.e.start)).filter((x) => x != null);
+  const stops = worked.map((d) => timeToDaySec(d.e.stop)).filter((x) => x != null);
   $("avgStart").textContent = starts.length
-    ? fmtClock(secToHm(starts.reduce((a, b) => a + b, 0) / starts.length))
+    ? fmtClock(daySecToClock(starts.reduce((a, b) => a + b, 0) / starts.length))
     : "n/a";
   $("avgStop").textContent = stops.length
-    ? fmtClock(secToHm(stops.reduce((a, b) => a + b, 0) / stops.length))
+    ? fmtClock(daySecToClock(stops.reduce((a, b) => a + b, 0) / stops.length))
     : "n/a";
   $("daysN").textContent = String(allDays.length);
   chart.classList.toggle("scroll", view === "custom" && items.length > 14);
@@ -564,7 +602,7 @@ function setPickerOpen(o) {
 }
 
 function renderCalendar() {
-  const todayStr = fmtLocal(new Date());
+  const todayStr = logicalTodayStr();
   $("calTitle").textContent = new Date(calCursor.y, calCursor.m, 1).toLocaleDateString("en-US", {
     month: "long",
     year: "numeric",
@@ -674,10 +712,25 @@ $("todaySubtract").addEventListener("change", async (ev) => {
   }
 });
 
+$("dayStartHour").addEventListener("change", async (ev) => {
+  try {
+    entries = await invoke("set_day_start_hour", { hour: Number(ev.target.value) });
+    settings.day_start_hour = Number(ev.target.value);
+    today = await invoke("get_today");
+    settings = await invoke("get_settings");
+    renderToday();
+    renderSettings();
+    renderAll();
+  } catch (e) {
+    console.error(e);
+  }
+});
+
 $("use24hToggle").addEventListener("change", async (ev) => {
   try {
     settings = await invoke("set_use_24h", { use24h: ev.target.checked });
     renderToday();
+    renderSettings();
     renderAll();
   } catch (e) {
     console.error(e);

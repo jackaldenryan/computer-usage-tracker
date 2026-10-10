@@ -10,7 +10,6 @@
 #[path = "../tracker.rs"]
 mod tracker;
 
-use chrono::Local;
 use std::path::PathBuf;
 
 fn usage() -> ! {
@@ -37,9 +36,14 @@ fn main() {
     };
     let mut st = tracker::load_settings_from(&sp);
     let csv = csv_override.unwrap_or_else(|| st.csv_path.clone());
-    let today = Local::now().date_naive();
+    let today = tracker::logical_today(st.day_start_hour);
 
-    match tracker::backfill(&csv, st.use_auto_subtract, st.background_epoch.as_deref()) {
+    match tracker::backfill(
+        &csv,
+        st.use_auto_subtract,
+        st.background_epoch.as_deref(),
+        st.day_start_hour,
+    ) {
         Ok(rows) => {
             // Stamp the epoch on first success: from here on, gaps the log
             // can't fill are recorded as 0h (machine would have been caught

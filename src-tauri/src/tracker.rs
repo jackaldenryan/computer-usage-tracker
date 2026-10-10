@@ -18,7 +18,7 @@
 //! sustained usage (machine off/asleep all day is also 0h). Missing dates
 //! BEFORE the epoch stay missing (= N/A): back then nobody was looking.
 
-use chrono::{Local, NaiveDate, NaiveTime};
+use chrono::{Local, NaiveDate, NaiveTime, Timelike};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -54,6 +54,8 @@ pub struct Settings {
     pub use_auto_subtract: bool,
     #[serde(default)]
     pub use_24h: bool,
+    #[serde(default = "default_day_start_hour")]
+    pub day_start_hour: u32,
     /// First date the hourly background job successfully ran (YYYY-MM-DD).
     /// Set by wht-track, never by the GUI. Gaps on/after this date that the
     /// log can't fill are recorded as 0h; older gaps stay N/A.
@@ -75,6 +77,14 @@ pub fn app_support_dir() -> PathBuf {
         "{}/Library/Application Support/com.workhours.tracker",
         home
     ))
+}
+
+pub fn default_day_start_hour() -> u32 {
+    4
+}
+
+pub fn clamp_day_start_hour(h: u32) -> u32 {
+    h.min(23)
 }
 
 pub fn default_csv_path() -> String {
@@ -107,6 +117,7 @@ pub fn load_settings_from(p: &Path) -> Settings {
                     csv_path: default_csv_path(),
                     use_auto_subtract: false,
                     use_24h: false,
+                    day_start_hour: default_day_start_hour(),
                     background_epoch: None,
                 }
             }
@@ -115,6 +126,7 @@ pub fn load_settings_from(p: &Path) -> Settings {
                 csv_path: default_csv_path(),
                 use_auto_subtract: false,
                 use_24h: false,
+                day_start_hour: default_day_start_hour(),
                 background_epoch: None,
             }
         }
@@ -123,6 +135,7 @@ pub fn load_settings_from(p: &Path) -> Settings {
             csv_path: default_csv_path(),
             use_auto_subtract: false,
             use_24h: false,
+            day_start_hour: default_day_start_hour(),
             background_epoch: None,
         }
     };
@@ -177,57 +190,97 @@ pub fn pmset_log() -> String {
     }
 }
 
-/// Parse first Display-on and last Display-off for a given YYYY-MM-DD date.
-pub fn parse_day(log: &str, target: &str) -> (Option<String>, Option<String>) {
-    let mut first_on: Option<String> = None;
-    let mut last_off: Option<String> = None;
-    let mut first_wake: Option<String> = None;
+pub fn assign_logical_date(cal: NaiveDate, t: NaiveTime, day_start_hour: u32) -> NaiveDate {
+    if t.hour() < clamp_day_start_hour(day_start_hour) {
+        cal.pred_opt().unwrap_or(cal)
+    } else {
+        cal
+    }
+}
+
+pub fn logical_today(day_start_hour: u32) -> NaiveDate {
+    let n = Local::now().naive_local();
+    assign_logical_date(n.date(), n.time(), day_start_hour)
+}
+
+fn parse_log_stamp(line: &str) -> Option<(NaiveDate, NaiveTime, String)> {
+    if line.len() < 19 {
+        return None;
+    }
+    let cal = NaiveDate::parse_from_str(line.get(0..10)?, "%Y-%m-%d").ok()?;
+    let tstr = line.get(11..19)?.to_string();
+    let t = parse_hms(&tstr)?;
+    Some((cal, t, tstr))
+}
+
+fn line_on_logical_day(line: &str, target: &str, day_start_hour: u32) -> Option<String> {
+    let (cal, t, tstr) = parse_log_stamp(line)?;
+    if assign_logical_date(cal, t, day_start_hour).to_string() == target {
+        Some(tstr)
+    } else {
+        None
+    }
+}
+
+fn secs_from_day_start(t: NaiveTime, day_start_hour: u32) -> i64 {
+    let s = t.num_seconds_from_midnight() as i64;
+    let start = clamp_day_start_hour(day_start_hour) as i64 * 3600;
+    if s >= start {
+        s - start
+    } else {
+        s + 86400 - start
+    }
+}
+
+/// Parse first Display-on and last Display-off for a logical YYYY-MM-DD day.
+pub fn parse_day(log: &str, target: &str, day_start_hour: u32) -> (Option<String>, Option<String>) {
+    let mut first_on: Option<(i64, String)> = None;
+    let mut last_off: Option<(i64, String)> = None;
+    let mut first_wake: Option<(i64, String)> = None;
 
     for line in log.lines() {
-        if line.len() < 19 {
+        let Some(tstr) = line_on_logical_day(line, target, day_start_hour) else {
             continue;
-        }
-        if !line.starts_with(target) {
-            continue;
-        }
-        let t = line.get(11..19).unwrap_or("").to_string();
-        if t.is_empty() {
-            continue;
-        }
+        };
+        let Some(t) = parse_hms(&tstr) else { continue };
+        let off = secs_from_day_start(t, day_start_hour);
         if line.contains("Display is turned on") {
-            if first_on.is_none() {
-                first_on = Some(t.clone());
+            if first_on.as_ref().map(|(o, _)| off < *o).unwrap_or(true) {
+                first_on = Some((off, tstr));
             }
         } else if line.contains("Display is turned off") {
-            last_off = Some(t.clone());
+            if last_off.as_ref().map(|(o, _)| off >= *o).unwrap_or(true) {
+                last_off = Some((off, tstr));
+            }
         } else if line.contains("Wake from") && !line.contains("DarkWake") {
-            if first_wake.is_none() {
-                first_wake = Some(t.clone());
+            if first_wake.as_ref().map(|(o, _)| off < *o).unwrap_or(true) {
+                first_wake = Some((off, tstr));
             }
         }
     }
-    (first_on.or(first_wake), last_off)
+    (
+        first_on.or(first_wake).map(|(_, s)| s),
+        last_off.map(|(_, s)| s),
+    )
 }
 
 /// Automatically-calculated minutes to subtract: total time the display was
 /// off in gaps BETWEEN the first on and the last event of the day.
 /// Returns None when the day has no on/wake event at all (nothing to measure).
-pub fn compute_auto_gap_minutes(log: &str, target: &str) -> Option<i64> {
-    let mut events: Vec<(NaiveTime, bool)> = Vec::new(); // (time, is_on)
+pub fn compute_auto_gap_minutes(log: &str, target: &str, day_start_hour: u32) -> Option<i64> {
+    let mut events: Vec<(i64, bool)> = Vec::new();
     let mut saw_any_on = false;
     for line in log.lines() {
-        if line.len() < 19 || !line.starts_with(target) {
+        let Some(tstr) = line_on_logical_day(line, target, day_start_hour) else {
             continue;
-        }
-        let t = match line.get(11..19).and_then(|s| parse_hms(s)) {
-            Some(t) => t,
-            None => continue,
         };
+        let Some(t) = parse_hms(&tstr) else { continue };
+        let off = secs_from_day_start(t, day_start_hour);
         if line.contains("Display is turned on") {
             saw_any_on = true;
-            events.push((t, true));
+            events.push((off, true));
         } else if line.contains("Display is turned off") {
-            events.push((t, false));
+            events.push((off, false));
         } else if line.contains("Wake from") && !line.contains("DarkWake") {
             saw_any_on = true;
         }
@@ -235,14 +288,13 @@ pub fn compute_auto_gap_minutes(log: &str, target: &str) -> Option<i64> {
     if !saw_any_on {
         return None;
     }
-    // Sum off->on gaps. If display events are missing entirely (wake fallback
-    // only), there are no observable gaps -> 0.
+    events.sort_by_key(|(o, _)| *o);
     let mut gap_secs: i64 = 0;
-    let mut off_since: Option<NaiveTime> = None;
+    let mut off_since: Option<i64> = None;
     for (t, is_on) in events {
         if is_on {
             if let Some(off) = off_since.take() {
-                let d = (t - off).num_seconds();
+                let d = t - off;
                 if d > 0 {
                     gap_secs += d;
                 }
@@ -255,17 +307,18 @@ pub fn compute_auto_gap_minutes(log: &str, target: &str) -> Option<i64> {
 }
 
 /// All dates in pmset log that have any Display-on event.
-pub fn earliest_logged_date(log: &str) -> Option<String> {
+pub fn earliest_logged_date(log: &str, day_start_hour: u32) -> Option<String> {
     let mut min: Option<String> = None;
     for line in log.lines() {
-        if line.len() < 10 {
+        if !line.contains("Display is turned on") {
             continue;
         }
-        if line.contains("Display is turned on") {
-            let d = line.get(0..10).unwrap_or("").to_string();
-            if d.len() == 10 && (min.is_none() || Some(&d) < min.as_ref()) {
-                min = Some(d);
-            }
+        let Some((cal, t, _)) = parse_log_stamp(line) else {
+            continue;
+        };
+        let d = assign_logical_date(cal, t, day_start_hour).to_string();
+        if min.as_ref().map(|m| d.as_str() < m.as_str()).unwrap_or(true) {
+            min = Some(d);
         }
     }
     min
@@ -283,10 +336,14 @@ pub fn gross_hours(start: &str, stop: &str) -> f64 {
         (Some(a), Some(b)) => (a, b),
         _ => return 0.0,
     };
-    let secs = (en - st).num_seconds() as f64;
-    if secs <= 0.0 {
+    let mut secs = (en - st).num_seconds();
+    if secs < 0 {
+        secs += 24 * 3600;
+    }
+    if secs <= 0 {
         return 0.0;
     }
+    let secs = secs as f64;
     (secs / 3600.0 * 100.0).round() / 100.0
 }
 
@@ -490,6 +547,7 @@ pub fn backfill_impl(
     epoch: Option<&str>,
     log: &str,
     today: NaiveDate,
+    day_start_hour: u32,
 ) -> Result<Vec<DayEntry>, String> {
     // Never overwrite an existing file we cannot read (e.g. TCC denying a
     // background process access to ~/Documents): that would silently destroy
@@ -502,7 +560,7 @@ pub fn backfill_impl(
     let today_s = today.to_string();
 
     // Pass 1: fill missing days within pmset log coverage [log_start .. today].
-    let log_start = earliest_logged_date(log).unwrap_or_else(|| today_s.clone());
+    let log_start = earliest_logged_date(log, day_start_hour).unwrap_or_else(|| today_s.clone());
     let Ok(mut d) = NaiveDate::parse_from_str(&log_start, "%Y-%m-%d") else {
         return Ok(map.values().cloned().collect());
     };
@@ -510,84 +568,42 @@ pub fn backfill_impl(
 
     while d <= today_d {
         let ds = d.to_string();
-        let is_today = ds == today_s;
-        match map.get(&ds).cloned() {
-            None => {
-                let (start, stop) = parse_day(log, &ds);
-                let s = start.unwrap_or_default();
-                let e = stop.unwrap_or_default();
-                let auto = compute_auto_gap_minutes(log, &ds);
-                let auto = if s.is_empty() { None } else { auto.or(Some(0)) };
-                let man = Some(0);
-                let hours = if s.is_empty() && e.is_empty() {
-                    0.0 // confirmed no usage within log coverage
-                } else if e.is_empty() {
-                    0.0 // running (today) or incomplete: provisional, live calc in UI
-                } else {
-                    let sub = if use_auto { auto } else { man };
-                    net_hours(&s, &e, sub)
-                };
-                map.insert(
-                    ds.clone(),
-                    DayEntry {
-                        date: ds,
-                        start: s,
-                        stop: e,
-                        subtract_manual_minutes: man,
-                        subtract_auto_minutes: auto,
-                        hours_worked: hours,
-                    },
-                );
+        if map.get(&ds).map(is_uploaded).unwrap_or(false) {
+            d = d.succ_opt().unwrap_or(today_d);
+            if d > today_d {
+                break;
             }
-            Some(mut e) => {
-                if is_uploaded(&e) {
-                    // trusted upload: never recompute
-                } else if !e.start.is_empty() || !e.stop.is_empty() {
-                    // tracked row: refresh today from log (still changing)
-                    if is_today {
-                        let (start, stop) = parse_day(log, &ds);
-                        if let Some(s) = start {
-                            e.start = s;
-                        }
-                        e.stop = stop.unwrap_or_default();
-                        let auto = compute_auto_gap_minutes(log, &ds);
-                        if auto.is_some() {
-                            e.subtract_auto_minutes = auto;
-                        } else if !e.start.is_empty()
-                            && e.subtract_auto_minutes.is_none()
-                        {
-                            e.subtract_auto_minutes = Some(0);
-                        }
-                    } else if e.subtract_auto_minutes.is_none() && !e.start.is_empty()
-                    {
-                        // backfill missing auto for legacy rows while log still covers them
-                        if let Some(a) = compute_auto_gap_minutes(log, &ds) {
-                            e.subtract_auto_minutes = Some(a);
-                        }
-                    }
-                    if e.subtract_manual_minutes.is_none() {
-                        e.subtract_manual_minutes = Some(0);
-                    }
-                    if e.stop.is_empty() && !is_today {
-                        // past day, never closed: leave hours 0, visible as incomplete
-                        e.hours_worked = 0.0;
-                    } else if e.stop.is_empty() {
-                        e.hours_worked = 0.0; // today running: provisional
-                    } else {
-                        e.hours_worked =
-                            net_hours(&e.start, &e.stop, active_sub(&e, use_auto));
-                    }
-                    map.insert(ds, e);
-                } else {
-                    // confirmed zero-use row: keep hours 0, ensure manual default
-                    if e.subtract_manual_minutes.is_none() {
-                        e.subtract_manual_minutes = Some(0);
-                    }
-                    e.hours_worked = 0.0;
-                    map.insert(ds, e);
-                }
-            }
+            continue;
         }
+        let prev = map.get(&ds).cloned();
+        let (start, stop) = parse_day(log, &ds, day_start_hour);
+        let s = start.unwrap_or_default();
+        let e = stop.unwrap_or_default();
+        let auto = compute_auto_gap_minutes(log, &ds, day_start_hour);
+        let auto = if s.is_empty() { None } else { auto.or(Some(0)) };
+        let man = prev
+            .as_ref()
+            .and_then(|p| p.subtract_manual_minutes)
+            .or(Some(0));
+        let hours = if s.is_empty() && e.is_empty() {
+            0.0
+        } else if e.is_empty() {
+            0.0
+        } else {
+            let sub = if use_auto { auto } else { man };
+            net_hours(&s, &e, sub)
+        };
+        map.insert(
+            ds.clone(),
+            DayEntry {
+                date: ds,
+                start: s,
+                stop: e,
+                subtract_manual_minutes: man,
+                subtract_auto_minutes: auto,
+                hours_worked: hours,
+            },
+        );
         d = d.succ_opt().unwrap_or(today_d);
         if d > today_d {
             break;
@@ -626,10 +642,11 @@ pub fn backfill(
     csv_path: &str,
     use_auto: bool,
     epoch: Option<&str>,
+    day_start_hour: u32,
 ) -> Result<Vec<DayEntry>, String> {
     let log = pmset_log();
-    let today = Local::now().date_naive();
-    backfill_impl(csv_path, use_auto, epoch, &log, today)
+    let today = logical_today(day_start_hour);
+    backfill_impl(csv_path, use_auto, epoch, &log, today, day_start_hour)
 }
 
 pub fn recompute_all_tracked(path: &str, use_auto: bool) -> Result<Vec<DayEntry>, String> {
@@ -704,10 +721,11 @@ pub fn set_manual_subtract(
     csv_path: &str,
     use_auto: bool,
     epoch: Option<&str>,
+    day_start_hour: u32,
     date: &str,
     minutes: i64,
 ) -> Result<DayEntry, String> {
-    let _ = backfill(csv_path, use_auto, epoch);
+    let _ = backfill(csv_path, use_auto, epoch, day_start_hour);
     let mut map = load_entries_from_csv(csv_path);
     let mins = minutes.max(0).min(1440);
     if let Some(e) = map.get_mut(date) {
@@ -1260,10 +1278,10 @@ mod tests {
                    2026-10-01 20:44:13 -0500 Notification  \tDisplay is turned on\n\
                    2026-10-01 22:38:57 -0500 Notification  \tDisplay is turned off\n";
         assert_eq!(
-            compute_auto_gap_minutes(log, "2026-10-01"),
+            compute_auto_gap_minutes(log, "2026-10-01", 4),
             Some(0)
-        ); // 20s rounds to 0
-        assert_eq!(compute_auto_gap_minutes(log, "2026-10-02"), None); // no events
+        );
+        assert_eq!(compute_auto_gap_minutes(log, "2026-10-02", 4), None);
     }
 
     #[test]
@@ -1296,7 +1314,7 @@ mod tests {
         let path = tmp_csv("wht_epoch_test.csv");
         std::fs::write(&path, "date,start,stop,subtract_manual_minutes,subtract_auto_minutes,hours_worked\n").unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 10, 7).unwrap();
-        let rows = backfill_impl(&path, false, Some("2026-10-01"), &log, today).unwrap();
+        let rows = backfill_impl(&path, false, Some("2026-10-01"), &log, today, 4).unwrap();
         let by: BTreeMap<String, &DayEntry> =
             rows.iter().map(|e| (e.date.clone(), e)).collect();
         for d in ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05"] {
@@ -1316,7 +1334,7 @@ mod tests {
         let path = tmp_csv("wht_noepoch_test.csv");
         std::fs::write(&path, "date,start,stop,subtract_manual_minutes,subtract_auto_minutes,hours_worked\n").unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
-        let rows = backfill_impl(&path, false, None, &log, today).unwrap();
+        let rows = backfill_impl(&path, false, None, &log, today, 4).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].date, "2026-10-06");
         let _ = std::fs::remove_file(&path);
@@ -1329,7 +1347,7 @@ mod tests {
         let path = tmp_csv("wht_epochbound_test.csv");
         std::fs::write(&path, "date,start,stop,subtract_manual_minutes,subtract_auto_minutes,hours_worked\n").unwrap();
         let today = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
-        let rows = backfill_impl(&path, false, Some("2026-10-05"), &log, today).unwrap();
+        let rows = backfill_impl(&path, false, Some("2026-10-05"), &log, today, 4).unwrap();
         let dates: Vec<&str> = rows.iter().map(|e| e.date.as_str()).collect();
         assert_eq!(dates, vec!["2026-10-05", "2026-10-06"]);
         assert_eq!(rows[0].hours_worked, 0.0);
@@ -1414,5 +1432,26 @@ mod tests {
 
         std::env::set_var("HOME", &real_home);
         let _ = std::fs::remove_dir_all(&fake);
+    }
+
+    #[test]
+    fn overnight_hours_count_on_previous_logical_day() {
+        let log = "2026-10-09 09:00:00 -0500 Notification  \tDisplay is turned on\n\
+                   2026-10-10 02:00:00 -0500 Notification  \tDisplay is turned off\n";
+        let (on, off) = parse_day(log, "2026-10-09", 4);
+        assert_eq!(on.as_deref(), Some("09:00:00"));
+        assert_eq!(off.as_deref(), Some("02:00:00"));
+        let (on10, off10) = parse_day(log, "2026-10-10", 4);
+        assert!(on10.is_none() && off10.is_none());
+        assert_eq!(gross_hours("09:00:00", "02:00:00"), 17.0);
+        assert_eq!(
+            assign_logical_date(
+                NaiveDate::from_ymd_opt(2026, 10, 10).unwrap(),
+                parse_hms("02:00:00").unwrap(),
+                4
+            )
+            .to_string(),
+            "2026-10-09"
+        );
     }
 }
