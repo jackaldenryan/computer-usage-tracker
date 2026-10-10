@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Work Hours Tracker</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div>
+          <h1>Work Hours Tracker</h1>
+          <p class="sub">Automatic daily tracking from Mac power log</p>
+        </div>
+        <div class="top-actions">
+          <button id="refreshBtn" class="btn">Refresh now</button>
+          <button id="settingsBtn" class="btn secondary">Settings</button>
+        </div>
+      </header>
+
+      <section id="todayCard" class="card today">
+        <div class="today-grid">
+          <div>
+            <div class="label">TODAY</div>
+            <div id="todayDate" class="today-date">—</div>
+            <div id="todayRange" class="today-range">—</div>
+          </div>
+          <div>
+            <div class="label">HOURS SO FAR</div>
+            <div id="todayHours" class="today-hours">0.00</div>
+            <div id="todayLive" class="live">● live</div>
+          </div>
+          <div>
+            <label class="label" for="todaySubtract">MANUAL MINUTES TO SUBTRACT</label>
+            <input id="todaySubtract" type="number" min="0" max="1440" step="1" value="0" />
+            <div class="hint">Saved immediately. Defaults to 0.</div>
+            <div class="hint">Auto gap: <span id="todayAuto">n/a</span> · <span id="modeBadge" class="badge">stats: manual</span></div>
+            <div id="saveMsg" class="save-msg"></div>
+          </div>
+        </div>
+      </section>
+
+      <nav class="tabs">
+        <button data-view="week" class="tab active">This week</button>
+        <button data-view="month" class="tab">This month</button>
+        <button data-view="byweek" class="tab">By week</button>
+        <button data-view="bymonth" class="tab">By month</button>
+        <button data-view="custom" class="tab">Custom…</button>
+      </nav>
+
+      <div id="pickerWrap" class="range-wrap hidden">
+        <span class="label">DATE RANGE</span>
+        <button id="rangeButton" class="btn secondary range-button" type="button"><span id="rangeLabel">Last 30 days</span> ▾</button>
+        <div id="rangePanel" class="range-panel hidden">
+          <div class="range-presets">
+            <p class="range-heading">To date</p>
+            <button type="button" class="preset" data-preset="today">Today</button>
+            <button type="button" class="preset" data-preset="wtd">Week to date</button>
+            <button type="button" class="preset" data-preset="mtd">Month to date</button>
+            <button type="button" class="preset" data-preset="ytd">Year to date</button>
+            <p class="range-heading">Rolling</p>
+            <button type="button" class="preset" data-preset="1w">Last 7 days</button>
+            <button type="button" class="preset" data-preset="2w">Last 14 days</button>
+            <button type="button" class="preset" data-preset="1mo">Last 30 days</button>
+            <button type="button" class="preset" data-preset="6mo">Last 6 months</button>
+            <button type="button" class="preset" data-preset="1y">Last year</button>
+            <button type="button" class="preset" data-preset="all">All time</button>
+          </div>
+          <div class="range-calendar">
+            <div class="cal-nav">
+              <button id="calPrev" type="button" class="btn secondary">‹</button>
+              <span id="calTitle"></span>
+              <button id="calNext" type="button" class="btn secondary">›</button>
+            </div>
+            <div class="cal-grid" id="calGrid"></div>
+            <div class="range-apply">
+              <span id="rangeMsg" class="hint"></span>
+              <button id="rangeCancel" type="button" class="btn secondary">Cancel</button>
+              <button id="rangeApply" type="button" class="btn">Apply</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <section class="card">
+        <div class="stats">
+          <div><span class="label">TOTAL</span><span id="totalH">0.00h</span></div>
+          <div><span class="label">AVERAGE</span><span id="avgH">0.00h</span></div>
+          <div><span class="label">DAYS</span><span id="daysN">0</span></div>
+          <div><span id="viewTitle" class="view-title"></span></div>
+        </div>
+        <div id="chart" class="chart"></div>
+        <div class="legend">Future days shown empty. Days with no data show n/a and are excluded from averages.</div>
+      </section>
+
+      <section class="card">
+        <h2>Entries</h2>
+        <table>
+          <thead>
+            <tr><th>Date</th><th>Start</th><th>Stop</th><th>Manual− (min)</th><th>Auto− (min)</th><th>Hours</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </section>
+
+      <div id="settingsModal" class="modal hidden">
+        <div class="modal-box">
+          <h2>Settings</h2>
+          <label class="label">SUBTRACT MODE FOR STATISTICS</label>
+          <label class="switch-row">
+            <input id="useAutoToggle" type="checkbox" />
+            <span>Use <b>automatic</b> gap subtract (off = manual)</span>
+          </label>
+          <p class="hint">Manual = your entered minutes. Auto = display-off gaps measured from the power log. Charts, totals and averages all follow this toggle.</p>
+          <label class="label">CSV FILE (FIXED LOCATION)</label>
+          <div class="csv-row">
+            <code id="csvPath">—</code>
+          </div>
+          <div class="modal-actions">
+            <button id="closeSettings" class="btn secondary">Close</button>
+          </div>
+          <p class="hint">CSV columns: date, start, stop, subtract_manual_minutes, subtract_auto_minutes, hours_worked. Imports cleanly into Google Sheets (File → Import → Upload the file above).</p>
+          <p class="hint">Tracking source: <code>pmset -g log</code> → first “Display is turned on” = start, last “Display is turned off” = stop, display-off gaps = auto subtract. Backfills on every launch, so quitting the app loses nothing.</p>
+          <h2>Hourly background tracking</h2>
+          <p id="bgStatus" class="hint"></p>
+          <div class="modal-actions">
+            <button id="bgToggleBtn" class="btn">Enable hourly tracking</button>
+          </div>
+          <p id="bgLastRun" class="hint"></p>
+          <p id="bgMsg" class="hint"></p>
+          <h2>Backfill from CSV</h2>
+          <p class="hint">Upload a CSV to add older days. <b>Required columns:</b> <code>date</code> (YYYY-MM-DD) + <code>hours_worked</code> (final hours, gaps already accounted for). <b>Optional:</b> <code>start</code>, <code>stop</code>, <code>subtract_manual_minutes</code>, <code>subtract_auto_minutes</code>. Missing subtracts are stored as n/a and uploaded hours are trusted as-is in both modes. Existing dates are merged (hours replaced; other fields only when provided).</p>
+          <div class="modal-actions">
+            <button id="uploadBtn" class="btn">Upload backfill CSV…</button>
+          </div>
+          <p id="importMsg" class="hint"></p>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

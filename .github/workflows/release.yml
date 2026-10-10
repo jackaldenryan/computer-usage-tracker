@@ -1,0 +1,54 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build app
+        run: npx tauri build
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          app="src-tauri/target/release/bundle/macos/Work Hours Tracker.app"
+          dmg=(src-tauri/target/release/bundle/dmg/*.dmg)
+          mkdir -p dist
+          cp "${dmg[0]}" "dist/WorkHoursTracker-${version}.dmg"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "dist/WorkHoursTracker-${version}.zip"
+          notes="Download WorkHoursTracker-${version}.dmg, open it, and drag Work Hours Tracker into Applications.
+
+          Open the app, then enable hourly background tracking in Settings."
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" --title "Work Hours Tracker ${GITHUB_REF_NAME}" --notes "$notes"
+          fi
