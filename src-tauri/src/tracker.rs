@@ -5,8 +5,8 @@
 //! - `segments.csv`: one row per display-on → display-off
 //!   (`started_at,ended_at` as local `YYYY-MM-DD HH:MM:SS`). Empty `ended_at`
 //!   = still on. Never filtered, never deleted.
-//! - `overrides.csv`: optional manual start/stop/subtract per date. Empty
-//!   start/stop = use the value computed from segments.
+//! - `overrides.csv`: user-supplied start/stop/subtract/hours per date
+//!   (typed edits and CSV backfill). Empty start/stop = use segments.
 //!
 //! Main CSV (`work-hours.csv`) is a materialized view of segments + overrides:
 //! date,start,stop,subtract_manual_minutes,hours_worked,start_manual,stop_manual
@@ -661,10 +661,14 @@ pub struct DayOverride {
     pub start: String,
     pub stop: String,
     pub subtract_minutes: Option<i64>,
+    pub hours: Option<f64>,
 }
 
 fn override_is_empty(o: &DayOverride) -> bool {
-    o.start.is_empty() && o.stop.is_empty() && o.subtract_minutes.unwrap_or(0) == 0
+    o.start.is_empty()
+        && o.stop.is_empty()
+        && o.subtract_minutes.unwrap_or(0) == 0
+        && o.hours.unwrap_or(0.0) == 0.0
 }
 
 fn load_overrides(path: &Path) -> BTreeMap<String, DayOverride> {
@@ -681,10 +685,17 @@ fn load_overrides(path: &Path) -> BTreeMap<String, DayOverride> {
         let start = r.get(1).unwrap_or("").trim().to_string();
         let stop = r.get(2).unwrap_or("").trim().to_string();
         let subtract_minutes = r.get(3).map(parse_opt_i64).flatten();
+        let hours = r
+            .get(4)
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse::<f64>().ok())
+            .filter(|h| *h >= 0.0);
         let o = DayOverride {
             start,
             stop,
             subtract_minutes,
+            hours,
         };
         if !override_is_empty(&o) {
             map.insert(date, o);
@@ -700,7 +711,7 @@ fn write_overrides(path: &Path, map: &BTreeMap<String, DayOverride>) -> Result<(
         }
     }
     let mut wtr = csv::Writer::from_path(path).map_err(|e| e.to_string())?;
-    wtr.write_record(["date", "start", "stop", "subtract_minutes"])
+    wtr.write_record(["date", "start", "stop", "subtract_minutes", "hours"])
         .map_err(|e| e.to_string())?;
     for (date, o) in map {
         if override_is_empty(o) {
@@ -711,6 +722,7 @@ fn write_overrides(path: &Path, map: &BTreeMap<String, DayOverride>) -> Result<(
             o.start.as_str(),
             o.stop.as_str(),
             &o.subtract_minutes.map(|m| m.to_string()).unwrap_or_default(),
+            &o.hours.map(|h| format!("{h:.2}")).unwrap_or_default(),
         ])
         .map_err(|e| e.to_string())?;
     }
@@ -732,15 +744,37 @@ fn seed_overrides_from_entries(map: &BTreeMap<String, DayEntry>) -> BTreeMap<Str
             } else {
                 String::new()
             },
-            subtract_minutes: e
-                .subtract_manual_minutes
-                .filter(|m| *m != 0),
+            subtract_minutes: e.subtract_manual_minutes.filter(|m| *m != 0),
+            hours: if is_uploaded(e) {
+                Some(e.hours_worked)
+            } else {
+                None
+            },
         };
         if !override_is_empty(&o) {
             out.insert(d.clone(), o);
         }
     }
     out
+}
+
+fn entry_from_override(date: String, o: &DayOverride) -> DayEntry {
+    let man = o.subtract_minutes.or(Some(0));
+    let hours = match o.hours {
+        Some(h) => (h.max(0.0) * 100.0).round() / 100.0,
+        None if !o.start.is_empty() && !o.stop.is_empty() => net_hours(&o.start, &o.stop, man),
+        None => 0.0,
+    };
+    DayEntry {
+        date,
+        start: o.start.clone(),
+        stop: o.stop.clone(),
+        subtract_manual_minutes: man,
+        subtract_auto_minutes: None,
+        hours_worked: hours,
+        start_manual: !o.start.is_empty(),
+        stop_manual: !o.stop.is_empty(),
+    }
 }
 
 pub fn parse_segments_from_log(log: &str) -> Vec<Segment> {
@@ -951,13 +985,20 @@ pub fn backfill_impl(
     let mut map = load_entries_from_csv(csv_path);
     let today_s = today.to_string();
     let ov_path = overrides_path(csv_path);
-    let overrides = if ov_path.exists() {
+    let mut overrides = if ov_path.exists() {
         load_overrides(&ov_path)
     } else {
-        let seeded = seed_overrides_from_entries(&map);
-        let _ = write_overrides(&ov_path, &seeded);
-        seeded
+        seed_overrides_from_entries(&map)
     };
+    for (d, e) in &map {
+        if is_uploaded(e) {
+            let o = overrides.entry(d.clone()).or_default();
+            if o.hours.is_none() {
+                o.hours = Some(e.hours_worked);
+            }
+        }
+    }
+    let _ = write_overrides(&ov_path, &overrides);
 
     let seg_path = segments_path(csv_path);
     let mut segs = load_segments(&seg_path);
@@ -979,7 +1020,10 @@ pub fn backfill_impl(
 
     while d <= today_d {
         let ds = d.to_string();
-        if map.get(&ds).map(is_uploaded).unwrap_or(false) {
+        if overrides.get(&ds).map(|o| o.hours.is_some()).unwrap_or(false) {
+            if let Some(o) = overrides.get(&ds) {
+                map.insert(ds.clone(), entry_from_override(ds.clone(), o));
+            }
             d = d.succ_opt().unwrap_or(today_d);
             if d > today_d {
                 break;
@@ -1048,6 +1092,12 @@ pub fn backfill_impl(
         d = d.succ_opt().unwrap_or(today_d);
         if d > today_d {
             break;
+        }
+    }
+
+    for (date, o) in &overrides {
+        if !map.contains_key(date) {
+            map.insert(date.clone(), entry_from_override(date.clone(), o));
         }
     }
 
@@ -1197,6 +1247,9 @@ pub fn set_day_fields(
     let ov_path = overrides_path(csv_path);
     let mut overrides = load_overrides(&ov_path);
     let o = overrides.entry(date.to_string()).or_default();
+    if start.is_some() || stop.is_some() {
+        o.hours = None;
+    }
     if let Some(raw) = start {
         let t = raw.trim();
         if t.is_empty() {
@@ -1475,6 +1528,7 @@ pub fn import_file(
         if row.man_provided {
             o.subtract_minutes = row.man;
         }
+        o.hours = Some(row.hours);
         if ov.get(&row.date).map(override_is_empty).unwrap_or(false) {
             ov.remove(&row.date);
         }
@@ -2088,6 +2142,7 @@ mod tests {
                 start: "10:00:00".to_string(),
                 stop: String::new(),
                 subtract_minutes: Some(30),
+                hours: None,
             },
         );
         write_overrides(&overrides_path(&path), &ov).unwrap();
@@ -2100,6 +2155,33 @@ mod tests {
         assert!(e.start_manual);
         assert_eq!(e.subtract_manual_minutes, Some(30));
         assert_eq!(e.hours_worked, 6.5);
+        let _ = std::fs::remove_dir_all(Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn hours_override_is_backfill_and_survives_log_rolloff() {
+        let path = tmp_csv("wht_hours_ov.csv");
+        std::fs::write(
+            &path,
+            "date,start,stop,subtract_manual_minutes,subtract_auto_minutes,hours_worked\n",
+        )
+        .unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 10, 7).unwrap();
+        let mut ov = BTreeMap::new();
+        ov.insert(
+            "2026-09-20".to_string(),
+            DayOverride {
+                start: String::new(),
+                stop: String::new(),
+                subtract_minutes: None,
+                hours: Some(7.5),
+            },
+        );
+        write_overrides(&overrides_path(&path), &ov).unwrap();
+        let rows = backfill_impl(&path, false, None, "", today, 4, 10).unwrap();
+        let e = rows.iter().find(|r| r.date == "2026-09-20").unwrap();
+        assert_eq!(e.hours_worked, 7.5);
+        assert_eq!(e.start, "");
         let _ = std::fs::remove_dir_all(Path::new(&path).parent().unwrap());
     }
 
