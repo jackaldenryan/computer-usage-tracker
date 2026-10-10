@@ -32,10 +32,9 @@
             <div id="todayLive" class="live">● live</div>
           </div>
           <div>
-            <label class="label" for="todaySubtract">MANUAL MINUTES TO SUBTRACT</label>
-            <input id="todaySubtract" type="number" min="0" max="1440" step="1" value="0" />
-            <div class="hint">Saved immediately. Defaults to 0.</div>
-            <div class="hint">Auto gap: <span id="todayAuto">n/a</span> · <span id="modeBadge" class="badge">stats: manual</span></div>
+            <label class="label" for="todaySubtract">MINUTES TO SUBTRACT</label>
+            <input id="todaySubtract" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" value="0" />
+            <div class="hint">Edit in the table below, or here. Saved when you leave the field. Empty start/stop in the table reverts to auto.</div>
             <div id="saveMsg" class="save-msg"></div>
           </div>
         </div>
@@ -120,7 +119,7 @@
         <h2>Entries</h2>
         <table>
           <thead>
-            <tr><th>Date</th><th>Start</th><th>Stop</th><th>Manual− (min)</th><th>Auto− (min)</th><th>Hours</th></tr>
+            <tr><th>Date</th><th>Start</th><th>Stop</th><th>Subtract (min)</th><th>Hours</th></tr>
           </thead>
           <tbody id="rows"></tbody>
         </table>
@@ -132,12 +131,6 @@
             <h2>Settings</h2>
             <button id="closeSettings" type="button" class="btn secondary">Close</button>
           </div>
-          <label class="label">SUBTRACT MODE FOR STATISTICS</label>
-          <label class="switch-row">
-            <input id="useAutoToggle" type="checkbox" />
-            <span>Use <b>automatic</b> gap subtract (off = manual)</span>
-          </label>
-          <p class="hint">Manual = your entered minutes. Auto = display-off gaps measured from the power log. Charts, totals and averages all follow this toggle.</p>
           <label class="label">TIME FORMAT</label>
           <label class="switch-row">
             <input id="use24hToggle" type="checkbox" />
@@ -153,8 +146,8 @@
           <div class="csv-row">
             <code id="csvPath">—</code>
           </div>
-          <p class="hint">CSV columns: date, start, stop, subtract_manual_minutes, subtract_auto_minutes, hours_worked. Imports cleanly into Google Sheets (File → Import → Upload the file above).</p>
-          <p class="hint">Tracking source: <code>pmset -g log</code> → first “Display is turned on” = start, last “Display is turned off” = stop, display-off gaps = auto subtract. Backfills on every launch, so quitting the app loses nothing.</p>
+          <p class="hint">CSV is a view of <code>segments.csv</code> (raw display sessions) plus <code>overrides.csv</code> (manual start/stop/subtract). Imports cleanly into Google Sheets.</p>
+          <p class="hint">Tracking source: <code>pmset -g log</code> → display-on/off segments. Start/stop in the table override the computed times. Backfills on every launch, so quitting the app loses nothing.</p>
           <h2>Hourly background tracking</h2>
           <p id="bgStatus" class="hint"></p>
           <div class="modal-actions">
@@ -169,7 +162,7 @@
           </div>
           <p id="updateMsg" class="hint"></p>
           <h2>Backfill from CSV</h2>
-          <p class="hint">Upload a CSV to add older days. <b>Required columns:</b> <code>date</code> (YYYY-MM-DD) + <code>hours_worked</code> (final hours, gaps already accounted for). <b>Optional:</b> <code>start</code>, <code>stop</code>, <code>subtract_manual_minutes</code>, <code>subtract_auto_minutes</code>. Missing subtracts are stored as n/a and uploaded hours are trusted as-is in both modes. Existing dates are merged (hours replaced; other fields only when provided).</p>
+          <p class="hint">Upload a CSV to add older days. <b>Required columns:</b> <code>date</code> (YYYY-MM-DD) + <code>hours_worked</code>. <b>Optional:</b> <code>start</code>, <code>stop</code>, <code>subtract_manual_minutes</code>. Existing dates are merged (hours replaced; other fields only when provided).</p>
           <div class="modal-actions">
             <button id="uploadBtn" class="btn">Upload backfill CSV…</button>
           </div>

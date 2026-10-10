@@ -36,10 +36,18 @@ body {
 .today-range { color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .today-hours { font-size: 34px; font-weight: 800; font-variant-numeric: tabular-nums; }
 .live { color: var(--accent); font-size: 12px; }
-input[type="number"] {
+input[type="number"],
+input[type="text"] {
   width: 140px; padding: 8px 10px; border-radius: 8px;
   border: 1px solid var(--border); background: #0f141b; color: var(--text); font-size: 16px;
 }
+table input[type="text"] {
+  width: 100%; min-width: 92px; height: 36px; font-size: 16px;
+}
+table input.manual { border-color: var(--accent); }
+.cell-edit { display: flex; align-items: center; gap: 6px; }
+.manual-tag { font-size: 10px; color: var(--accent); font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; }
+.manual-tag.hidden { display: none; }
 .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
 .save-msg { font-size: 12px; color: var(--accent); min-height: 16px; margin-top: 4px; }
 .controls { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; margin: 0 0 12px; }
@@ -149,7 +157,7 @@ tr.na-row { color: var(--muted); }
 table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); font-size: 14px; }
 th { color: var(--muted); font-size: 12px; }
-td input { width: 90px; padding: 6px 8px; font-size: 14px; }
+td input { width: 100%; min-width: 92px; height: 36px; padding: 8px 10px; font-size: 16px; }
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; padding: 12px; overflow: auto; }
 .modal.hidden { display: none; }
 .update-toast {

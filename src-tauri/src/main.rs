@@ -72,11 +72,31 @@ fn set_subtract(
     let st = load_settings(&app);
     tracker::set_manual_subtract(
         &st.csv_path,
-        st.use_auto_subtract,
         epoch_of(&st),
         st.day_start_hour,
         st.min_session_minutes,
         &date,
+        minutes,
+    )
+}
+
+#[tauri::command]
+fn set_day_fields(
+    app: tauri::AppHandle,
+    date: String,
+    start: Option<String>,
+    stop: Option<String>,
+    minutes: Option<i64>,
+) -> Result<tracker::DayEntry, String> {
+    let st = load_settings(&app);
+    tracker::set_day_fields(
+        &st.csv_path,
+        epoch_of(&st),
+        st.day_start_hour,
+        st.min_session_minutes,
+        &date,
+        start,
+        stop,
         minutes,
     )
 }
@@ -258,6 +278,7 @@ pub fn run() {
             get_today,
             get_settings,
             set_subtract,
+            set_day_fields,
             set_use_auto,
             set_use_24h,
             set_day_start_hour,

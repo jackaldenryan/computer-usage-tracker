@@ -182,6 +182,65 @@ function timeToDaySec(t) {
 function daySecToClock(sec) {
   return secToHm(sec + (settings.day_start_hour ?? 4) * 3600);
 }
+const ONES = {
+  zero: 0, oh: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
+  ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
+  seventeen: 17, eighteen: 18, nineteen: 19,
+};
+const TENS = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+function spokenToInt(s) {
+  const t = String(s || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  if (/^\d+$/.test(t)) return parseInt(t, 10);
+  let n = 0, cur = 0;
+  for (const w of t.split(" ")) {
+    if (w === "and") continue;
+    if (w === "hundred") { cur = (cur || 1) * 100; continue; }
+    if (ONES[w] != null) cur += ONES[w];
+    else if (TENS[w] != null) cur += TENS[w];
+    else return null;
+  }
+  return n + cur;
+}
+function parseMinutesInput(s) {
+  const raw = String(s || "").trim();
+  if (!raw) return 0;
+  const d = raw.match(/\d+/);
+  if (d) return Math.max(0, Math.min(1440, parseInt(d[0], 10)));
+  const n = spokenToInt(raw.replace(/minutes?|mins?/gi, ""));
+  if (n == null) return null;
+  return Math.max(0, Math.min(1440, n));
+}
+function parseTimeInput(s) {
+  let t = String(s || "").trim();
+  if (!t) return "";
+  t = t.toLowerCase().replace(/\./g, "").replace(/,/g, "");
+  t = t.replace(/\b(o'?clock)\b/g, "").trim();
+  const pm = /\b(pm|p)\b/.test(t);
+  const am = /\b(am|a)\b/.test(t);
+  t = t.replace(/\b(am|pm|a|p)\b/g, " ").replace(/\s+/g, " ").trim();
+  const bits = [];
+  for (const w of t.split(" ")) {
+    if (/^\d+$/.test(w)) bits.push(w);
+    else {
+      const n = spokenToInt(w);
+      if (n != null) bits.push(String(n));
+    }
+  }
+  if (bits.length) t = bits.length === 1 ? bits[0] : `${bits[0]}:${bits[1]}${bits[2] ? ":" + bits[2] : ""}`;
+  let h, m = 0, sec = 0;
+  let mt = t.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
+  if (mt) { h = +mt[1]; m = +mt[2]; sec = +(mt[3] || 0); }
+  else if (/^\d{3,4}$/.test(t)) {
+    h = t.length === 3 ? +t[0] : +t.slice(0, 2);
+    m = +t.slice(-2);
+  } else if (/^\d{1,2}$/.test(t)) h = +t;
+  else return null;
+  if (pm && h < 12) h += 12;
+  if (am && h === 12) h = 0;
+  if (h > 23 || m > 59 || sec > 59) return null;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
 function fmtClock(t) {
   if (!t || t === "—" || t === "running…") return t || "—";
   const sec = timeToSec(t);
@@ -308,10 +367,8 @@ function renderToday() {
   $("todayRange").textContent = today.start ? `${fmtClock(today.start)} → ${fmtClock(today.stop_or_now) || "…"}` : "not started yet";
   $("todayHours").textContent = (today.hours_so_far ?? 0).toFixed(2) + "h";
   $("todayLive").style.display = today.is_running ? "block" : "none";
-  $("todayAuto").textContent = today.subtract_auto_minutes == null ? "n/a" : `${today.subtract_auto_minutes} min`;
   const inp = $("todaySubtract");
-  if (document.activeElement !== inp) inp.value = today.subtract_manual_minutes ?? 0;
-  $("modeBadge").textContent = settings.use_auto_subtract ? "stats: auto" : "stats: manual";
+  if (document.activeElement !== inp) inp.value = String(today.subtract_manual_minutes ?? 0);
 }
 
 function hourLabel(h) {
@@ -324,7 +381,6 @@ function hourLabel(h) {
 
 function renderSettings() {
   $("csvPath").textContent = settings.csv_path || "—";
-  $("useAutoToggle").checked = !!settings.use_auto_subtract;
   $("use24hToggle").checked = !!settings.use_24h;
   const sel = $("dayStartHour");
   const cur = settings.day_start_hour ?? 4;
@@ -469,7 +525,7 @@ function renderAll() {
   const { title, items, grouped } = barData();
   const groupedTime = grouped && chartMetric !== "hours";
   const metricName = chartMetric === "hours" ? "hours" : groupedTime ? `avg ${chartMetric}` : chartMetric;
-  $("viewTitle").textContent = `${title} · ${metricName} · ${settings.use_auto_subtract ? "auto subtract" : "manual subtract"}`;
+  $("viewTitle").textContent = `${title} · ${metricName}`;
   $("rangeLabel").textContent = fmtRangeLabel();
   const vals = items.filter((i) => !i.future && !i.na && metricVal(i) != null).map(metricVal);
   const max = Math.max(1, ...vals);
@@ -544,6 +600,8 @@ function renderAll() {
     ? fmtClock(daySecToClock(stops.reduce((a, b) => a + b, 0) / stops.length))
     : "n/a";
   $("daysN").textContent = String(allDays.length);
+  const ae = document.activeElement;
+  if (ae && (ae.closest("#rows") || ae.id === "todaySubtract")) return;
   const tb = $("rows");
   tb.innerHTML = "";
   if (!grouped) {
@@ -562,48 +620,107 @@ function renderAll() {
     for (const it of items.slice().reverse()) {
       const tr = document.createElement("tr");
       const hrs = it.future || it.na ? "n/a" : it.hours.toFixed(2);
-      tr.innerHTML = `<td>${it.key}</td><td colspan="2">${it.label}</td><td>—</td><td>—</td><td>${hrs}</td>`;
+        tr.innerHTML = `<td>${it.key}</td><td colspan="2">${it.label}</td><td>—</td><td>${hrs}</td>`;
       tb.append(tr);
     }
   }
 }
 
-function rowEl(e) {
-  const tr = document.createElement("tr");
-  const start = e.start ? fmtClock(e.start) : "—";
-  const stop = e.stop ? fmtClock(e.stop) : (e.date === today?.date && today?.is_running ? "running…" : "—");
-  const td0 = document.createElement("td");
-  td0.textContent = e.date;
-  const td1 = document.createElement("td");
-  td1.textContent = start;
-  const td2 = document.createElement("td");
-  td2.textContent = stop;
-  tr.append(td0, td1, td2);
-  const td = document.createElement("td");
-  const inp = document.createElement("input");
-  inp.type = "number"; inp.min = "0"; inp.max = "1440";
-  inp.value = e.subtract_manual_minutes ?? "";
-  inp.placeholder = "n/a";
-  inp.addEventListener("change", async () => {
-    const raw = inp.value === "" ? 0 : parseInt(inp.value || "0", 10);
-    const mins = Math.max(0, Math.min(1440, raw));
-    inp.value = mins;
-    try {
-      await invoke("set_subtract", { date: e.date, minutes: mins });
-      $("saveMsg").textContent = `Saved ${e.date}: manual -${mins} min`;
-      setTimeout(() => ($("saveMsg").textContent = ""), 2000);
-      await load();
-    } catch (err) {
-      console.error(err);
+function bindCommit(inp, commit) {
+  inp.autocomplete = "off";
+  inp.spellcheck = false;
+  inp.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      inp.blur();
     }
   });
-  td.append(inp);
-  const tda = document.createElement("td");
-  tda.textContent = fmtSub(e.subtract_auto_minutes);
-  tda.className = e.subtract_auto_minutes == null ? "na" : "";
+  inp.addEventListener("blur", () => { void commit(); });
+}
+function editCell(value, placeholder, isManual) {
+  const wrap = document.createElement("div");
+  wrap.className = "cell-edit";
+  const inp = document.createElement("input");
+  inp.type = "text";
+  inp.value = value;
+  inp.placeholder = placeholder;
+  if (isManual) inp.classList.add("manual");
+  const tag = document.createElement("span");
+  tag.className = "manual-tag" + (isManual ? "" : " hidden");
+  tag.textContent = "manual";
+  wrap.append(inp, tag);
+  return { wrap, inp, tag };
+}
+async function saveFields(date, patch) {
+  const updated = await invoke("set_day_fields", {
+    date,
+    start: patch.start ?? null,
+    stop: patch.stop ?? null,
+    minutes: patch.minutes ?? null,
+  });
+  const i = entries.findIndex((e) => e.date === date);
+  if (i >= 0) entries[i] = updated;
+  else entries.push(updated);
+  if (today && today.date === date) today = await invoke("get_today");
+  const tr = document.querySelector(`tr[data-date="${date}"]`);
+  if (tr) {
+    const h = tr.querySelector(".hours-cell");
+    if (h) h.textContent = fmtH(hoursFor(updated, date));
+  }
+  renderToday();
+  renderAll();
+  $("saveMsg").textContent = `Saved ${date}`;
+  setTimeout(() => { if ($("saveMsg").textContent === `Saved ${date}`) $("saveMsg").textContent = ""; }, 2000);
+  return updated;
+}
+
+function rowEl(e) {
+  const tr = document.createElement("tr");
+  tr.dataset.date = e.date;
+  const td0 = document.createElement("td");
+  td0.textContent = e.date;
+  const startShow = e.start ? fmtClock(e.start) : "";
+  const stopShow = e.stop ? fmtClock(e.stop) : (e.date === today?.date && today?.is_running ? "running…" : "");
+  const startCell = editCell(startShow, "auto", !!e.start_manual);
+  bindCommit(startCell.inp, async () => {
+    const parsed = parseTimeInput(startCell.inp.value);
+    if (parsed == null) { startCell.inp.value = startShow; return; }
+    try {
+      const u = await saveFields(e.date, { start: parsed });
+      startCell.inp.value = u.start ? fmtClock(u.start) : "";
+      startCell.inp.classList.toggle("manual", !!u.start_manual);
+      startCell.tag.classList.toggle("hidden", !u.start_manual);
+    } catch (err) { console.error(err); }
+  });
+  const stopCell = editCell(stopShow === "running…" ? "" : stopShow, e.date === today?.date && today?.is_running ? "running…" : "auto", !!e.stop_manual);
+  bindCommit(stopCell.inp, async () => {
+    const parsed = parseTimeInput(stopCell.inp.value);
+    if (parsed == null) { stopCell.inp.value = stopShow === "running…" ? "" : stopShow; return; }
+    try {
+      const u = await saveFields(e.date, { stop: parsed });
+      stopCell.inp.value = u.stop ? fmtClock(u.stop) : "";
+      stopCell.inp.classList.toggle("manual", !!u.stop_manual);
+      stopCell.tag.classList.toggle("hidden", !u.stop_manual);
+    } catch (err) { console.error(err); }
+  });
+  const subCell = editCell(String(e.subtract_manual_minutes ?? 0), "0", (e.subtract_manual_minutes ?? 0) !== 0);
+  bindCommit(subCell.inp, async () => {
+    const mins = parseMinutesInput(subCell.inp.value);
+    if (mins == null) { subCell.inp.value = String(e.subtract_manual_minutes ?? 0); return; }
+    try {
+      const u = await saveFields(e.date, { minutes: mins });
+      subCell.inp.value = String(u.subtract_manual_minutes ?? 0);
+      subCell.inp.classList.toggle("manual", (u.subtract_manual_minutes ?? 0) !== 0);
+      subCell.tag.classList.toggle("hidden", (u.subtract_manual_minutes ?? 0) === 0);
+    } catch (err) { console.error(err); }
+  });
+  const td1 = document.createElement("td"); td1.append(startCell.wrap);
+  const td2 = document.createElement("td"); td2.append(stopCell.wrap);
+  const td3 = document.createElement("td"); td3.append(subCell.wrap);
   const htd = document.createElement("td");
+  htd.className = "hours-cell";
   htd.textContent = fmtH(hoursFor(e, e.date));
-  tr.append(td, tda, htd);
+  tr.append(td0, td1, td2, td3, htd);
   return tr;
 }
 
@@ -734,15 +851,16 @@ document.addEventListener("mousedown", (e) => {
   if (pickerOpen && !$("pickerWrap").contains(e.target)) setPickerOpen(false);
 });
 
-$("todaySubtract").addEventListener("change", async (ev) => {
+bindCommit($("todaySubtract"), async () => {
   if (!today) return;
-  const mins = Math.max(0, Math.min(1440, parseInt(ev.target.value || "0", 10)));
-  ev.target.value = mins;
+  const mins = parseMinutesInput($("todaySubtract").value);
+  if (mins == null) {
+    $("todaySubtract").value = String(today.subtract_manual_minutes ?? 0);
+    return;
+  }
   try {
-    await invoke("set_subtract", { date: today.date, minutes: mins });
-    $("saveMsg").textContent = `Saved today: manual -${mins} min`;
-    setTimeout(() => ($("saveMsg").textContent = ""), 2000);
-    await load();
+    await saveFields(today.date, { minutes: mins });
+    $("todaySubtract").value = String(mins);
   } catch (e) {
     console.error(e);
   }
@@ -789,17 +907,7 @@ $("use24hToggle").addEventListener("change", async (ev) => {
   }
 });
 
-$("useAutoToggle").addEventListener("change", async (ev) => {
-  try {
-    entries = await invoke("set_use_auto", { useAuto: ev.target.checked });
-    settings.use_auto_subtract = ev.target.checked;
-    today = await invoke("get_today");
-    renderToday();
-    renderAll();
-  } catch (e) {
-    console.error(e);
-  }
-});
+
 
 $("refreshBtn").addEventListener("click", async () => {
   try {
