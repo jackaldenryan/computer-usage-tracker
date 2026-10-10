@@ -1,4 +1,4 @@
-//! wht-track: headless hourly tracker for Work Hours Tracker.
+//! wht-track: headless hourly tracker for Computer Usage Tracker.
 //!
 //! Reads the shared settings file (same one the GUI uses), runs the same
 //! backfill over `pmset -g log`, writes the CSV, and stamps

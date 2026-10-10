@@ -6,7 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 
 let entries = [];
 let today = null;
-let settings = { csv_path: "", use_auto_subtract: false };
+let settings = { csv_path: "", use_auto_subtract: false, use_24h: false };
 let view = "week";
 // Custom range — same functionality as cursor-cost-tracking's RangePicker:
 // preset buttons (to-date + rolling) plus a calendar for arbitrary ranges.
@@ -101,6 +101,35 @@ function fmtH(h) {
 function fmtSub(v) {
   return v == null ? "n/a" : String(v);
 }
+function hoursFor(e, key) {
+  if (today && key === today.date) return today.hours_so_far ?? 0;
+  return e ? e.hours_worked ?? 0 : 0;
+}
+function timeToSec(t) {
+  if (!t) return null;
+  const p = String(t).split(":").map(Number);
+  if (p.length < 2 || p.some((n) => Number.isNaN(n))) return null;
+  return p[0] * 3600 + p[1] * 60 + (p[2] || 0);
+}
+function secToHm(sec) {
+  const s = Math.round(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+function fmtClock(t) {
+  if (!t || t === "—" || t === "running…") return t || "—";
+  const sec = timeToSec(t);
+  if (sec == null) return t;
+  const h24 = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const mm = String(m).padStart(2, "0");
+  if (settings.use_24h) return `${String(h24).padStart(2, "0")}:${mm}`;
+  const ap = h24 >= 12 ? "PM" : "AM";
+  let h = h24 % 12;
+  if (h === 0) h = 12;
+  return `${h}:${mm} ${ap}`;
+}
 
 async function load() {
   try {
@@ -148,7 +177,7 @@ function dayItem(d, m, todayStr) {
   const e = m.get(key);
   if (key > todayStr) return { label: "", sub: "", key, hours: null, na: false, future: true, date: d };
   if (!e) return { label: "", sub: key.slice(5), key, hours: null, na: true, future: false, date: d };
-  return { label: "", sub: key.slice(5), key, hours: e.hours_worked ?? 0, na: false, future: false, date: d };
+  return { label: "", sub: key.slice(5), key, hours: hoursFor(e, key), na: false, future: false, date: d };
 }
 
 function lastNWeeks(n) {
@@ -166,7 +195,7 @@ function lastNWeeks(n) {
       const key = fmtLocal(d);
       if (key > todayStr) continue;
       const e = m.get(key);
-      if (e) { total += e.hours_worked || 0; count++; }
+      if (e) { total += hoursFor(e, key); count++; }
     }
     const future = fmtLocal(mon) > todayStr;
     out.push({
@@ -193,7 +222,7 @@ function groupWeeks(startStr, endStr, m, todayStr) {
       const key = fmtLocal(d);
       if (key < startStr || key > endStr || key > todayStr) continue;
       const en = m.get(key);
-      if (en) { total += en.hours_worked || 0; count++; }
+      if (en) { total += hoursFor(en, key); count++; }
     }
     const monStr = fmtLocal(cur);
     const future = monStr > todayStr;
@@ -221,7 +250,7 @@ function lastNMonths(n) {
       const key = `${y}-${String(mo + 1).padStart(2, "0")}-${String(k).padStart(2, "0")}`;
       if (key > todayStr) continue;
       const e = m.get(key);
-      if (e) { total += e.hours_worked || 0; count++; }
+      if (e) { total += hoursFor(e, key); count++; }
     }
     const future = fmtLocal(d) > todayStr;
     const label = d.toLocaleString("en-US", { month: "short" });
@@ -237,7 +266,7 @@ function lastNMonths(n) {
 function renderToday() {
   if (!today) return;
   $("todayDate").textContent = today.date;
-  $("todayRange").textContent = today.start ? `${today.start} → ${today.stop_or_now || "…"}` : "not started yet";
+  $("todayRange").textContent = today.start ? `${fmtClock(today.start)} → ${fmtClock(today.stop_or_now) || "…"}` : "not started yet";
   $("todayHours").textContent = (today.hours_so_far ?? 0).toFixed(2) + "h";
   $("todayLive").style.display = today.is_running ? "block" : "none";
   $("todayAuto").textContent = today.subtract_auto_minutes == null ? "n/a" : `${today.subtract_auto_minutes} min`;
@@ -249,6 +278,7 @@ function renderToday() {
 function renderSettings() {
   $("csvPath").textContent = settings.csv_path || "—";
   $("useAutoToggle").checked = !!settings.use_auto_subtract;
+  $("use24hToggle").checked = !!settings.use_24h;
   $("bgMsg").textContent = "";
   refreshBgStatus();
 }
@@ -286,6 +316,43 @@ $("bgToggleBtn").addEventListener("click", async () => {
     $("bgMsg").textContent = `Failed: ${e}`;
   }
 });
+
+function eachDate(start, end, todayStr) {
+  const out = [];
+  const s = new Date(start);
+  const e = new Date(end);
+  for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
+    const key = fmtLocal(d);
+    if (key > todayStr) continue;
+    out.push(key);
+  }
+  return out;
+}
+
+function viewDayKeys() {
+  const todayStr = fmtLocal(new Date());
+  const now = new Date();
+  if (view === "week") return weekDays().map(fmtLocal).filter((k) => k <= todayStr);
+  if (view === "month") return monthDays().map(fmtLocal).filter((k) => k <= todayStr);
+  if (view === "byweek") {
+    const cur = mondayOf(now);
+    const start = new Date(cur);
+    start.setDate(cur.getDate() - 7 * 7);
+    return eachDate(start, now, todayStr);
+  }
+  if (view === "bymonth") {
+    const start = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    return eachDate(start, now, todayStr);
+  }
+  let sStr = customPreset === "all" ? earliestEntryDate() || todayStr : customStart;
+  let s = parseLocalDate(sStr);
+  let e = parseLocalDate(customEnd);
+  if (!s || !e || s > e) return [];
+  const maxStart = new Date(e);
+  maxStart.setDate(maxStart.getDate() - 730);
+  if (s < maxStart) s = maxStart;
+  return eachDate(s, e, todayStr);
+}
 
 function barData() {
   const m = byDate();
@@ -371,12 +438,34 @@ function renderAll() {
     }
     chart.append(col);
   }
-  const dataItems = items.filter((i) => !i.future && !i.na && i.hours != null);
-  const total = dataItems.reduce((a, b) => a + b.hours, 0);
-  const avg = dataItems.length ? total / dataItems.length : 0;
+  const m = byDate();
+  const todayStr = today?.date || fmtLocal(new Date());
+  const dayKeys = viewDayKeys();
+  const allDays = [];
+  const worked = [];
+  for (const key of dayKeys) {
+    const e = m.get(key);
+    if (!e) continue;
+    const hours = hoursFor(e, key);
+    allDays.push({ key, e, hours });
+    if (hours > 0) worked.push({ key, e, hours });
+  }
+  const workedExcl = worked.filter((d) => d.key !== todayStr);
+  const meanH = (arr) => (arr.length ? (arr.reduce((a, b) => a + b.hours, 0) / arr.length).toFixed(2) + "h" : "n/a");
+  const total = allDays.reduce((a, b) => a + b.hours, 0);
   $("totalH").textContent = total.toFixed(2) + "h";
-  $("avgH").textContent = dataItems.length ? avg.toFixed(2) + "h" : "n/a";
-  $("daysN").textContent = String(dataItems.length);
+  $("avgH").textContent = allDays.length ? (total / allDays.length).toFixed(2) + "h" : "n/a";
+  $("avgWorkedH").textContent = meanH(worked);
+  $("avgWorkedExclH").textContent = meanH(workedExcl);
+  const starts = worked.map((d) => timeToSec(d.e.start)).filter((x) => x != null);
+  const stops = worked.map((d) => timeToSec(d.e.stop)).filter((x) => x != null);
+  $("avgStart").textContent = starts.length
+    ? fmtClock(secToHm(starts.reduce((a, b) => a + b, 0) / starts.length))
+    : "n/a";
+  $("avgStop").textContent = stops.length
+    ? fmtClock(secToHm(stops.reduce((a, b) => a + b, 0) / stops.length))
+    : "n/a";
+  $("daysN").textContent = String(allDays.length);
   chart.classList.toggle("scroll", view === "custom" && items.length > 14);
 
   const tb = $("rows");
@@ -405,8 +494,8 @@ function renderAll() {
 
 function rowEl(e) {
   const tr = document.createElement("tr");
-  const start = e.start || "—";
-  const stop = e.stop || (e.date === today?.date && today?.is_running ? "running…" : "—");
+  const start = e.start ? fmtClock(e.start) : "—";
+  const stop = e.stop ? fmtClock(e.stop) : (e.date === today?.date && today?.is_running ? "running…" : "—");
   const td0 = document.createElement("td");
   td0.textContent = e.date;
   const td1 = document.createElement("td");
@@ -437,7 +526,7 @@ function rowEl(e) {
   tda.textContent = fmtSub(e.subtract_auto_minutes);
   tda.className = e.subtract_auto_minutes == null ? "na" : "";
   const htd = document.createElement("td");
-  htd.textContent = fmtH(e.hours_worked);
+  htd.textContent = fmtH(hoursFor(e, e.date));
   tr.append(td, tda, htd);
   return tr;
 }
@@ -580,6 +669,16 @@ $("todaySubtract").addEventListener("change", async (ev) => {
     $("saveMsg").textContent = `Saved today: manual -${mins} min`;
     setTimeout(() => ($("saveMsg").textContent = ""), 2000);
     await load();
+  } catch (e) {
+    console.error(e);
+  }
+});
+
+$("use24hToggle").addEventListener("change", async (ev) => {
+  try {
+    settings = await invoke("set_use_24h", { use24h: ev.target.checked });
+    renderToday();
+    renderAll();
   } catch (e) {
     console.error(e);
   }

@@ -52,6 +52,8 @@ pub struct Settings {
     pub csv_path: String,
     #[serde(default)]
     pub use_auto_subtract: bool,
+    #[serde(default)]
+    pub use_24h: bool,
     /// First date the hourly background job successfully ran (YYYY-MM-DD).
     /// Set by wht-track, never by the GUI. Gaps on/after this date that the
     /// log can't fill are recorded as 0h; older gaps stay N/A.
@@ -104,6 +106,7 @@ pub fn load_settings_from(p: &Path) -> Settings {
                 Settings {
                     csv_path: default_csv_path(),
                     use_auto_subtract: false,
+                    use_24h: false,
                     background_epoch: None,
                 }
             }
@@ -111,6 +114,7 @@ pub fn load_settings_from(p: &Path) -> Settings {
             Settings {
                 csv_path: default_csv_path(),
                 use_auto_subtract: false,
+                use_24h: false,
                 background_epoch: None,
             }
         }
@@ -118,6 +122,7 @@ pub fn load_settings_from(p: &Path) -> Settings {
         Settings {
             csv_path: default_csv_path(),
             use_auto_subtract: false,
+            use_24h: false,
             background_epoch: None,
         }
     };

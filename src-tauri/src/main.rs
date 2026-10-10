@@ -77,6 +77,14 @@ fn set_use_auto(app: tauri::AppHandle, use_auto: bool) -> Result<Vec<tracker::Da
 }
 
 #[tauri::command]
+fn set_use_24h(app: tauri::AppHandle, use_24h: bool) -> tracker::Settings {
+    let mut st = load_settings(&app);
+    st.use_24h = use_24h;
+    save_settings(&app, &st);
+    st
+}
+
+#[tauri::command]
 fn refresh(app: tauri::AppHandle) -> Result<Vec<tracker::DayEntry>, String> {
     let st = load_settings(&app);
     tracker::backfill(&st.csv_path, st.use_auto_subtract, epoch_of(&st))
@@ -173,6 +181,7 @@ pub fn run() {
             get_settings,
             set_subtract,
             set_use_auto,
+            set_use_24h,
             refresh,
             get_csv_path,
             import_backfill_csv,

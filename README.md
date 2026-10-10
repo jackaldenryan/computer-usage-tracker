@@ -1,18 +1,18 @@
-# Work Hours Tracker
+# Computer Usage Tracker
 
 Download the Mac app from [Releases](https://github.com/jackaldenryan/work-hours-tracker/releases/latest), drag it into Applications, and open it. It tracks the hours your Mac was in use each day — automatically, from the system power log — and shows them as bar charts with totals and averages.
 
 ## Install
 
 1. Open the [latest release](https://github.com/jackaldenryan/work-hours-tracker/releases/latest).
-2. Download **WorkHoursTracker-x.y.z.dmg**.
-3. Open the disk image and drag **Work Hours Tracker** into Applications.
-4. Open **Work Hours Tracker** from Applications.
+2. Download **ComputerUsageTracker-x.y.z.dmg**.
+3. Open the disk image and drag **Computer Usage Tracker** into Applications.
+4. Open **Computer Usage Tracker** from Applications.
 
 The app is unsigned. If macOS says it cannot be opened, right-click the app, choose Open, and confirm. You can also run this once:
 
 ```
-xattr -cr "/Applications/Work Hours Tracker.app"
+xattr -cr "/Applications/Computer Usage Tracker.app"
 ```
 
 Then open it again from Applications.
@@ -150,8 +150,8 @@ Same process as custom-mac-dictation. The version lives in `VERSION`
 ```
 
 Pushing the tag triggers `.github/workflows/release.yml` (macOS runner):
-builds the app and attaches `WorkHoursTracker-${version}.dmg` +
-`WorkHoursTracker-${version}.zip` to the GitHub Release. Apple Silicon only
+builds the app and attaches `ComputerUsageTracker-${version}.dmg` +
+`ComputerUsageTracker-${version}.zip` to the GitHub Release. Apple Silicon only
 for now; Intel Macs are a follow-up. Unsigned build (no Developer ID cert
 wired up yet — dictation signs to preserve TCC permissions; we don't need any
 TCC permissions by design).

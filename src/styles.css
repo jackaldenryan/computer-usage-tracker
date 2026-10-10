@@ -46,10 +46,19 @@ input[type="number"] {
   padding: 8px 14px; border-radius: 999px; cursor: pointer; font-weight: 600;
 }
 .tab.active { background: var(--text); color: #111; border-color: var(--text); }
-.stats { display: flex; gap: 24px; align-items: baseline; margin-bottom: 12px; }
-.stats .label { margin-right: 6px; }
-#totalH, #avgH, #daysN { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
-.view-title { margin-left: auto; color: var(--muted); font-size: 13px; }
+.chart-layout { display: flex; gap: 20px; align-items: stretch; }
+.stats {
+  display: flex; flex-direction: column; gap: 14px;
+  flex: 0 0 176px; margin: 0; padding: 4px 16px 4px 0;
+  border-right: 1px solid var(--border);
+}
+.stats > div { display: flex; flex-direction: column; gap: 2px; }
+.stats .label { margin-right: 0; }
+#totalH, #avgH, #avgWorkedH, #avgWorkedExclH, #avgStart, #avgStop, #daysN {
+  font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums;
+}
+.chart-main { flex: 1; min-width: 0; }
+.view-title { color: var(--muted); font-size: 13px; margin: 0 0 4px; }
 .chart { display: flex; align-items: flex-end; gap: 10px; min-height: 220px; padding: 12px 4px 4px; }
 .chart.scroll { overflow-x: auto; justify-content: flex-start; }
 .chart.scroll .bar-col { min-width: 52px; }

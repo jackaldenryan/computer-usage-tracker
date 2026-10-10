@@ -42,24 +42,24 @@ jobs:
         run: |
           version="$(tr -d '[:space:]' < VERSION)"
           tag="$GITHUB_REF_NAME"
-          app="src-tauri/target/release/bundle/macos/Work Hours Tracker.app"
+          app="src-tauri/target/release/bundle/macos/Computer Usage Tracker.app"
           dmg=(src-tauri/target/release/bundle/dmg/*.dmg)
           tar=(src-tauri/target/release/bundle/macos/*.app.tar.gz)
           sig="${tar[0]}.sig"
           mkdir -p dist
-          cp "${dmg[0]}" "dist/WorkHoursTracker-${version}.dmg"
-          ditto -c -k --sequesterRsrc --keepParent "$app" "dist/WorkHoursTracker-${version}.zip"
-          cp "${tar[0]}" "dist/WorkHoursTracker-${version}.app.tar.gz"
-          notes="Download WorkHoursTracker-${version}.dmg, open it, and drag Work Hours Tracker into Applications.
+          cp "${dmg[0]}" "dist/ComputerUsageTracker-${version}.dmg"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "dist/ComputerUsageTracker-${version}.zip"
+          cp "${tar[0]}" "dist/ComputerUsageTracker-${version}.app.tar.gz"
+          notes="Download ComputerUsageTracker-${version}.dmg, open it, and drag Computer Usage Tracker into Applications.
 
           Open the app, then enable hourly background tracking in Settings."
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" "dist/WorkHoursTracker-${version}.app.tar.gz" --clobber
+            gh release upload "$tag" "dist/ComputerUsageTracker-${version}.dmg" "dist/ComputerUsageTracker-${version}.zip" "dist/ComputerUsageTracker-${version}.app.tar.gz" --clobber
           else
-            gh release create "$tag" "dist/WorkHoursTracker-${version}.dmg" "dist/WorkHoursTracker-${version}.zip" "dist/WorkHoursTracker-${version}.app.tar.gz" --title "Work Hours Tracker ${tag}" --notes "$notes"
+            gh release create "$tag" "dist/ComputerUsageTracker-${version}.dmg" "dist/ComputerUsageTracker-${version}.zip" "dist/ComputerUsageTracker-${version}.app.tar.gz" --title "Computer Usage Tracker ${tag}" --notes "$notes"
           fi
           sig_b64="$(tr -d '[:space:]' < "$sig")"
-          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/WorkHoursTracker-${version}.app.tar.gz"
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/ComputerUsageTracker-${version}.app.tar.gz"
           node -e '
             const fs = require("fs");
             const [version, notes, sig, url] = process.argv.slice(1);

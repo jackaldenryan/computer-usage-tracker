@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Work Hours Tracker</title>
+    <title>Computer Usage Tracker</title>
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
     <div id="app">
       <header class="topbar">
         <div>
-          <h1>Work Hours Tracker</h1>
+          <h1>Computer Usage Tracker</h1>
           <p class="sub">Automatic daily tracking from Mac power log</p>
         </div>
         <div class="top-actions">
@@ -84,14 +84,22 @@
       </div>
 
       <section class="card">
-        <div class="stats">
-          <div><span class="label">TOTAL</span><span id="totalH">0.00h</span></div>
-          <div><span class="label">AVERAGE</span><span id="avgH">0.00h</span></div>
-          <div><span class="label">DAYS</span><span id="daysN">0</span></div>
-          <div><span id="viewTitle" class="view-title"></span></div>
+        <div class="chart-layout">
+          <aside class="stats">
+            <div><span class="label">TOTAL</span><span id="totalH">0.00h</span></div>
+            <div><span class="label">AVG (ALL DAYS)</span><span id="avgH">0.00h</span></div>
+            <div><span class="label">AVG (WORKED)</span><span id="avgWorkedH">n/a</span></div>
+            <div><span class="label">AVG (WORKED, EXCL. TODAY)</span><span id="avgWorkedExclH">n/a</span></div>
+            <div><span class="label">AVG START</span><span id="avgStart">n/a</span></div>
+            <div><span class="label">AVG STOP</span><span id="avgStop">n/a</span></div>
+            <div><span class="label">DAYS</span><span id="daysN">0</span></div>
+          </aside>
+          <div class="chart-main">
+            <div id="viewTitle" class="view-title"></div>
+            <div id="chart" class="chart"></div>
+            <div class="legend">Today uses live hours so far. Avg (all days) includes zeros; n/a excluded. Avg (worked) is days with hours &gt; 0 including today. Avg (worked, excl. today) drops today. Avg start/stop use days with hours &gt; 0 that have those times.</div>
+          </div>
         </div>
-        <div id="chart" class="chart"></div>
-        <div class="legend">Future days shown empty. Days with no data show n/a and are excluded from averages.</div>
       </section>
 
       <section class="card">
@@ -113,6 +121,11 @@
             <span>Use <b>automatic</b> gap subtract (off = manual)</span>
           </label>
           <p class="hint">Manual = your entered minutes. Auto = display-off gaps measured from the power log. Charts, totals and averages all follow this toggle.</p>
+          <label class="label">TIME FORMAT</label>
+          <label class="switch-row">
+            <input id="use24hToggle" type="checkbox" />
+            <span>Use <b>24-hour</b> time (off = 12-hour AM/PM)</span>
+          </label>
           <label class="label">CSV FILE (FIXED LOCATION)</label>
           <div class="csv-row">
             <code id="csvPath">—</code>
