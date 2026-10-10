@@ -766,7 +766,16 @@ $("settingsBtn").addEventListener("click", () => {
   $("importMsg").textContent = "";
   $("settingsModal").classList.remove("hidden");
 });
-$("closeSettings").addEventListener("click", () => $("settingsModal").classList.add("hidden"));
+function closeSettings() {
+  $("settingsModal").classList.add("hidden");
+}
+$("closeSettings").addEventListener("click", closeSettings);
+$("settingsModal").addEventListener("click", (e) => {
+  if (e.target.id === "settingsModal") closeSettings();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("settingsModal").classList.contains("hidden")) closeSettings();
+});
 
 $("uploadBtn").addEventListener("click", async () => {
   const sel = await open({ multiple: false, directory: false, filters: [{ name: "CSV", extensions: ["csv"] }] });

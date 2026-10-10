@@ -155,6 +155,13 @@ td input { width: 90px; padding: 6px 8px; font-size: 14px; }
 .update-toast .modal-actions { margin-bottom: 10px; }
 .update-toast .hidden { display: none; }
 .modal-box { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; width: min(560px, 100%); max-height: min(90vh, 800px); overflow-y: auto; }
+.modal-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  position: sticky; top: -22px; z-index: 2;
+  background: var(--card); margin: -22px -22px 14px; padding: 22px 22px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-head h2 { margin: 0; }
 select {
   width: 160px; padding: 8px 10px; border-radius: 8px;
   border: 1px solid var(--border); background: #0f141b; color: var(--text); font-size: 16px;

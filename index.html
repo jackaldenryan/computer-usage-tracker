@@ -114,7 +114,10 @@
 
       <div id="settingsModal" class="modal hidden">
         <div class="modal-box">
-          <h2>Settings</h2>
+          <div class="modal-head">
+            <h2>Settings</h2>
+            <button id="closeSettings" type="button" class="btn secondary">Close</button>
+          </div>
           <label class="label">SUBTRACT MODE FOR STATISTICS</label>
           <label class="switch-row">
             <input id="useAutoToggle" type="checkbox" />
@@ -132,9 +135,6 @@
           <label class="label">CSV FILE (FIXED LOCATION)</label>
           <div class="csv-row">
             <code id="csvPath">—</code>
-          </div>
-          <div class="modal-actions">
-            <button id="closeSettings" class="btn secondary">Close</button>
           </div>
           <p class="hint">CSV columns: date, start, stop, subtract_manual_minutes, subtract_auto_minutes, hours_worked. Imports cleanly into Google Sheets (File → Import → Upload the file above).</p>
           <p class="hint">Tracking source: <code>pmset -g log</code> → first “Display is turned on” = start, last “Display is turned off” = stop, display-off gaps = auto subtract. Backfills on every launch, so quitting the app loses nothing.</p>
