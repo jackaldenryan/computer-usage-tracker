@@ -465,7 +465,7 @@ function renderAll() {
     const h = (it.future || it.na || !it.hours) ? 8 : Math.max(10, Math.round((it.hours / max) * 170));
     b.className = "bar" + (!it.hours && !it.na ? " zero" : "") + (it.future ? " future" : "") + (it.na ? " na" : "");
     b.style.height = h + "px";
-    b.title = `${it.key || it.label}: ${it.hours == null ? "n/a" : it.hours.toFixed(2) + "h"}`;
+    col.title = `${it.key || it.label}: ${it.hours == null ? "n/a" : it.hours.toFixed(2) + "h"}`;
     const l = document.createElement("div");
     l.className = "bar-label";
     l.textContent = it.label;
@@ -478,6 +478,19 @@ function renderAll() {
     }
     chart.append(col);
   }
+  const n = items.length;
+  chart.style.gap = n > 50 ? "1px" : n > 30 ? "2px" : n > 16 ? "4px" : n > 10 ? "6px" : "10px";
+  requestAnimationFrame(() => {
+    for (const col of chart.querySelectorAll(".bar-col")) {
+      const w = col.clientWidth;
+      const val = col.querySelector(".bar-val");
+      const lab = col.querySelector(".bar-label");
+      const sub = col.querySelector(".bar-sub");
+      if (val) val.classList.toggle("tight", w < 28);
+      if (lab) lab.classList.toggle("tight", w < 18);
+      if (sub) sub.classList.toggle("tight", w < 22);
+    }
+  });
   const m = byDate();
   const todayStr = logicalTodayStr();
   const dayKeys = viewDayKeys();
@@ -506,8 +519,6 @@ function renderAll() {
     ? fmtClock(daySecToClock(stops.reduce((a, b) => a + b, 0) / stops.length))
     : "n/a";
   $("daysN").textContent = String(allDays.length);
-  chart.classList.toggle("scroll", view === "custom" && items.length > 14);
-
   const tb = $("rows");
   tb.innerHTML = "";
   if ((view === "week" || view === "month" || view === "custom") && !grouped) {
