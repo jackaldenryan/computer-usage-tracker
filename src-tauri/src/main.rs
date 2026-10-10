@@ -33,6 +33,7 @@ fn get_entries(app: tauri::AppHandle) -> Result<Vec<tracker::DayEntry>, String> 
         st.use_auto_subtract,
         epoch_of(&st),
         st.day_start_hour,
+        st.min_session_minutes,
     )
 }
 
@@ -49,6 +50,7 @@ fn get_today(app: tauri::AppHandle) -> Result<tracker::TodayInfo, String> {
         st.use_auto_subtract,
         epoch_of(&st),
         st.day_start_hour,
+        st.min_session_minutes,
     )?;
     let today = tracker::logical_today(st.day_start_hour);
     let now_str = chrono::Local::now().format("%H:%M:%S").to_string();
@@ -73,6 +75,7 @@ fn set_subtract(
         st.use_auto_subtract,
         epoch_of(&st),
         st.day_start_hour,
+        st.min_session_minutes,
         &date,
         minutes,
     )
@@ -107,6 +110,24 @@ fn set_day_start_hour(
         st.use_auto_subtract,
         epoch_of(&st),
         st.day_start_hour,
+        st.min_session_minutes,
+    )
+}
+
+#[tauri::command]
+fn set_min_session_minutes(
+    app: tauri::AppHandle,
+    minutes: u32,
+) -> Result<Vec<tracker::DayEntry>, String> {
+    let mut st = load_settings(&app);
+    st.min_session_minutes = tracker::clamp_min_session_minutes(minutes);
+    save_settings(&app, &st);
+    tracker::backfill(
+        &st.csv_path,
+        st.use_auto_subtract,
+        epoch_of(&st),
+        st.day_start_hour,
+        st.min_session_minutes,
     )
 }
 
@@ -118,6 +139,7 @@ fn refresh(app: tauri::AppHandle) -> Result<Vec<tracker::DayEntry>, String> {
         st.use_auto_subtract,
         epoch_of(&st),
         st.day_start_hour,
+        st.min_session_minutes,
     )
 }
 
@@ -239,6 +261,7 @@ pub fn run() {
             set_use_auto,
             set_use_24h,
             set_day_start_hour,
+            set_min_session_minutes,
             refresh,
             get_csv_path,
             import_backfill_csv,

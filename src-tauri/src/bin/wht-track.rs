@@ -43,6 +43,7 @@ fn main() {
         st.use_auto_subtract,
         st.background_epoch.as_deref(),
         st.day_start_hour,
+        st.min_session_minutes,
     ) {
         Ok(rows) => {
             // Stamp the epoch on first success: from here on, gaps the log

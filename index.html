@@ -132,6 +132,9 @@
           <label class="label" for="dayStartHour">DAY STARTS AT</label>
           <select id="dayStartHour"></select>
           <p class="hint">Hours before this time count toward the previous day. Default 4 AM — so working until 2 AM is still yesterday.</p>
+          <label class="label" for="minSessionMinutes">MINIMUM SESSION (MINUTES)</label>
+          <input id="minSessionMinutes" type="number" min="0" max="240" step="1" value="10" />
+          <p class="hint">A display-on period shorter than this is ignored (notification blips). Default 10. Start/stop use the first/last session that meets this length.</p>
           <label class="label">CSV FILE (FIXED LOCATION)</label>
           <div class="csv-row">
             <code id="csvPath">—</code>

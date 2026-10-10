@@ -6,7 +6,7 @@ import { getVersion } from "@tauri-apps/api/app";
 
 let entries = [];
 let today = null;
-let settings = { csv_path: "", use_auto_subtract: false, use_24h: false, day_start_hour: 4 };
+let settings = { csv_path: "", use_auto_subtract: false, use_24h: false, day_start_hour: 4, min_session_minutes: 10 };
 let view = "week";
 // Custom range — same functionality as cursor-cost-tracking's RangePicker:
 // preset buttons (to-date + rolling) plus a calendar for arbitrary ranges.
@@ -317,6 +317,8 @@ function renderSettings() {
     if (h === cur) o.selected = true;
     sel.append(o);
   }
+  const minInp = $("minSessionMinutes");
+  if (document.activeElement !== minInp) minInp.value = settings.min_session_minutes ?? 10;
   $("bgMsg").textContent = "";
   refreshBgStatus();
 }
@@ -707,6 +709,22 @@ $("todaySubtract").addEventListener("change", async (ev) => {
     $("saveMsg").textContent = `Saved today: manual -${mins} min`;
     setTimeout(() => ($("saveMsg").textContent = ""), 2000);
     await load();
+  } catch (e) {
+    console.error(e);
+  }
+});
+
+$("minSessionMinutes").addEventListener("change", async (ev) => {
+  try {
+    const minutes = Math.max(0, Math.min(240, Number(ev.target.value) || 0));
+    ev.target.value = minutes;
+    entries = await invoke("set_min_session_minutes", { minutes });
+    settings.min_session_minutes = minutes;
+    today = await invoke("get_today");
+    settings = await invoke("get_settings");
+    renderToday();
+    renderSettings();
+    renderAll();
   } catch (e) {
     console.error(e);
   }
