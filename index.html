@@ -41,32 +41,35 @@
         </div>
       </section>
 
-      <nav class="tabs">
-        <button data-view="week" class="tab active">This week</button>
-        <button data-view="month" class="tab">This month</button>
-        <button data-view="byweek" class="tab">By week</button>
-        <button data-view="bymonth" class="tab">By month</button>
-        <button data-view="custom" class="tab">Custom…</button>
-      </nav>
-
-      <div id="pickerWrap" class="range-wrap hidden">
-        <span class="label">DATE RANGE</span>
-        <button id="rangeButton" class="btn secondary range-button" type="button"><span id="rangeLabel">Last 30 days</span> ▾</button>
-        <div id="rangePanel" class="range-panel hidden">
-          <div class="range-presets">
-            <p class="range-heading">To date</p>
-            <button type="button" class="preset" data-preset="today">Today</button>
-            <button type="button" class="preset" data-preset="wtd">Week to date</button>
-            <button type="button" class="preset" data-preset="mtd">Month to date</button>
-            <button type="button" class="preset" data-preset="ytd">Year to date</button>
-            <p class="range-heading">Rolling</p>
-            <button type="button" class="preset" data-preset="1w">Last 7 days</button>
-            <button type="button" class="preset" data-preset="2w">Last 14 days</button>
-            <button type="button" class="preset" data-preset="1mo">Last 30 days</button>
-            <button type="button" class="preset" data-preset="6mo">Last 6 months</button>
-            <button type="button" class="preset" data-preset="1y">Last year</button>
-            <button type="button" class="preset" data-preset="all">All time</button>
-          </div>
+      <div class="controls">
+        <label class="control-inline">
+          <span>Bucket</span>
+          <select id="bucketSize">
+            <option value="1d" selected>1 day</option>
+            <option value="1w">1 week</option>
+            <option value="1mo">1 month</option>
+          </select>
+        </label>
+        <div id="pickerWrap" class="control-inline range-wrap">
+          <span>Date range</span>
+          <button id="rangeButton" class="btn secondary range-button" type="button"><span id="rangeLabel">1 month</span> ▾</button>
+          <div id="rangePanel" class="range-panel hidden">
+            <div class="range-presets">
+              <p class="range-heading">To date</p>
+              <button type="button" class="preset" data-preset="today">Today</button>
+              <button type="button" class="preset" data-preset="wtd">Week to date</button>
+              <button type="button" class="preset" data-preset="mtd">Month to date</button>
+              <button type="button" class="preset" data-preset="ytd">Year to date</button>
+              <p class="range-heading">Rolling</p>
+              <button type="button" class="preset" data-preset="24h">24 hours</button>
+              <button type="button" class="preset" data-preset="48h">48 hours</button>
+              <button type="button" class="preset" data-preset="1w">1 week</button>
+              <button type="button" class="preset" data-preset="2w">2 weeks</button>
+              <button type="button" class="preset" data-preset="1mo">1 month</button>
+              <button type="button" class="preset" data-preset="6mo">6 months</button>
+              <button type="button" class="preset" data-preset="1y">1 year</button>
+              <button type="button" class="preset" data-preset="all">All time</button>
+            </div>
           <div class="range-calendar">
             <div class="cal-nav">
               <button id="calPrev" type="button" class="btn secondary">‹</button>
@@ -80,6 +83,7 @@
               <button id="rangeApply" type="button" class="btn">Apply</button>
             </div>
           </div>
+        </div>
         </div>
       </div>
 
@@ -107,7 +111,7 @@
               </label>
             </div>
             <div id="chart" class="chart"></div>
-            <div class="legend">Chart metric: hours, start, or stop (week/month bars use the average). Today uses live hours so far. Avg (all days) includes zeros; n/a excluded. Avg (worked) is days with hours &gt; 0 including today. Avg (worked, excl. today) drops today. Avg start/stop use days with hours &gt; 0 that have those times.</div>
+            <div class="legend">Hover a bar for hours, start, and stop. Week/month buckets use averages. Today uses live hours so far. Avg (all days) includes zeros; n/a excluded. Avg (worked) is days with hours &gt; 0 including today. Avg (worked, excl. today) drops today. Avg start/stop use days with hours &gt; 0 that have those times.</div>
           </div>
         </div>
       </section>
@@ -183,6 +187,7 @@
         <button id="updateLaterBtn" class="btn secondary">Later</button>
       </div>
     </aside>
+    <div id="chartTip" class="chart-tooltip hidden"></div>
     <script type="module" src="./src/main.js"></script>
   </body>
 </html>

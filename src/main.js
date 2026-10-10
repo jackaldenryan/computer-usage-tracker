@@ -7,7 +7,7 @@ import { getVersion } from "@tauri-apps/api/app";
 let entries = [];
 let today = null;
 let settings = { csv_path: "", use_auto_subtract: false, use_24h: false, day_start_hour: 4, min_session_minutes: 10 };
-let view = "week";
+let bucketSize = "1d";
 let chartMetric = "hours";
 // Custom range — same functionality as cursor-cost-tracking's RangePicker:
 // preset buttons (to-date + rolling) plus a calendar for arbitrary ranges.
@@ -43,13 +43,16 @@ const PRESET_LABELS = {
   wtd: "Week to date",
   mtd: "Month to date",
   ytd: "Year to date",
-  "1w": "Last 7 days",
-  "2w": "Last 14 days",
-  "1mo": "Last 30 days",
-  "6mo": "Last 6 months",
-  "1y": "Last year",
+  "24h": "24 hours",
+  "48h": "48 hours",
+  "1w": "1 week",
+  "2w": "2 weeks",
+  "1mo": "1 month",
+  "6mo": "6 months",
+  "1y": "1 year",
   all: "All time",
 };
+const BUCKET_LABELS = { "1d": "1 day", "1w": "1 week", "1mo": "1 month" };
 
 function logicalNow() {
   const d = new Date();
@@ -69,6 +72,8 @@ function applyPresetRange(id) {
   if (id === "wtd") s = fmtLocal(mondayOf(now));
   else if (id === "mtd") s = fmtLocal(new Date(now.getFullYear(), now.getMonth(), 1));
   else if (id === "ytd") s = fmtLocal(new Date(now.getFullYear(), 0, 1));
+  else if (id === "24h") s = todayStr;
+  else if (id === "48h") s = shiftDays(todayStr, -1);
   else if (id === "1w") s = shiftDays(todayStr, -6);
   else if (id === "2w") s = shiftDays(todayStr, -13);
   else if (id === "1mo") s = shiftDays(todayStr, -29);
@@ -211,27 +216,18 @@ function byDate() {
   return m;
 }
 
-function weekDays() {
-  const mon = mondayOf(logicalNow());
-  const out = [];
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(mon);
-    d.setDate(mon.getDate() + i);
-    out.push(d);
+function selectedRange() {
+  const todayStr = logicalTodayStr();
+  const sStr = customPreset === "all" ? earliestEntryDate() || todayStr : customStart;
+  let s = parseLocalDate(sStr);
+  let e = parseLocalDate(customEnd);
+  if (!s || !e || s > e) {
+    s = parseLocalDate(todayStr);
+    e = s;
   }
-  return out;
+  return { start: fmtLocal(s), end: fmtLocal(e), s, e };
 }
 
-function monthDays() {
-  const now = logicalNow();
-  const out = [];
-  const y = now.getFullYear(), m = now.getMonth();
-  const n = new Date(y, m + 1, 0).getDate();
-  for (let i = 1; i <= n; i++) out.push(new Date(y, m, i));
-  return out;
-}
-
-// A day item: {label, sub, key, hours|null, na, future}
 function dayItem(d, m, todayStr) {
   const key = fmtLocal(d);
   const e = m.get(key);
@@ -249,32 +245,6 @@ function dayItem(d, m, todayStr) {
   };
 }
 
-function lastNWeeks(n) {
-  const m = byDate();
-  const todayStr = logicalTodayStr();
-  const cur = mondayOf(logicalNow());
-  const out = [];
-  for (let i = n - 1; i >= 0; i--) {
-    const mon = new Date(cur);
-    mon.setDate(cur.getDate() - i * 7);
-    const keys = [];
-    for (let k = 0; k < 7; k++) {
-      const d = new Date(mon);
-      d.setDate(mon.getDate() + k);
-      keys.push(fmtLocal(d));
-    }
-    const s = summarizeKeys(keys, m, todayStr);
-    const future = fmtLocal(mon) > todayStr;
-    out.push({
-      label: `Wk ${fmtLocal(mon).slice(5)}`, sub: "", key: fmtLocal(mon),
-      hours: s.hours, start: s.start, stop: s.stop, startSec: s.startSec, stopSec: s.stopSec,
-      na: !s.count && !future, future,
-    });
-  }
-  return out;
-}
-
-// Group an arbitrary [start,end] date span into Mon–Sun weekly buckets.
 function groupWeeks(startStr, endStr, m, todayStr) {
   const s = parseLocalDate(startStr);
   const e = parseLocalDate(endStr);
@@ -303,27 +273,31 @@ function groupWeeks(startStr, endStr, m, todayStr) {
   return out;
 }
 
-function lastNMonths(n) {
-  const m = byDate();
-  const todayStr = logicalTodayStr();
-  const now = logicalNow();
+function groupMonths(startStr, endStr, m, todayStr) {
+  const s = parseLocalDate(startStr);
+  const e = parseLocalDate(endStr);
   const out = [];
-  for (let i = n - 1; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const y = d.getFullYear(), mo = d.getMonth();
-    const days = new Date(y, mo + 1, 0).getDate();
+  if (!s || !e) return out;
+  const cur = new Date(s.getFullYear(), s.getMonth(), 1);
+  while (cur <= e) {
+    const y = cur.getFullYear(), mo = cur.getMonth();
+    const n = new Date(y, mo + 1, 0).getDate();
     const keys = [];
-    for (let k = 1; k <= days; k++) {
-      keys.push(`${y}-${String(mo + 1).padStart(2, "0")}-${String(k).padStart(2, "0")}`);
+    for (let k = 1; k <= n; k++) {
+      const key = `${y}-${String(mo + 1).padStart(2, "0")}-${String(k).padStart(2, "0")}`;
+      if (key >= startStr && key <= endStr) keys.push(key);
     }
-    const s = summarizeKeys(keys, m, todayStr);
+    const sum = summarizeKeys(keys, m, todayStr);
+    const d = new Date(y, mo, 1);
     const future = fmtLocal(d) > todayStr;
-    const label = d.toLocaleString("en-US", { month: "short" });
     out.push({
-      label, sub: String(y).slice(2), key: `${y}-${String(mo + 1).padStart(2, "0")}`,
-      hours: s.hours, start: s.start, stop: s.stop, startSec: s.startSec, stopSec: s.stopSec,
-      na: !s.count && !future, future,
+      label: d.toLocaleString("en-US", { month: "short" }),
+      sub: String(y).slice(2),
+      key: `${y}-${String(mo + 1).padStart(2, "0")}`,
+      hours: sum.hours, start: sum.start, stop: sum.stop, startSec: sum.startSec, stopSec: sum.stopSec,
+      na: !sum.count && !future, future, grouped: true,
     });
+    cur.setMonth(cur.getMonth() + 1);
   }
   return out;
 }
@@ -416,80 +390,32 @@ function eachDate(start, end, todayStr) {
 
 function viewDayKeys() {
   const todayStr = logicalTodayStr();
-  const now = logicalNow();
-  if (view === "week") return weekDays().map(fmtLocal).filter((k) => k <= todayStr);
-  if (view === "month") return monthDays().map(fmtLocal).filter((k) => k <= todayStr);
-  if (view === "byweek") {
-    const cur = mondayOf(now);
-    const start = new Date(cur);
-    start.setDate(cur.getDate() - 7 * 7);
-    return eachDate(start, now, todayStr);
-  }
-  if (view === "bymonth") {
-    const start = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-    return eachDate(start, now, todayStr);
-  }
-  let sStr = customPreset === "all" ? earliestEntryDate() || todayStr : customStart;
-  let s = parseLocalDate(sStr);
-  let e = parseLocalDate(customEnd);
-  if (!s || !e || s > e) return [];
-  const maxStart = new Date(e);
-  maxStart.setDate(maxStart.getDate() - 730);
-  if (s < maxStart) s = maxStart;
-  return eachDate(s, e, todayStr);
+  const r = selectedRange();
+  return eachDate(r.s, r.e, todayStr);
 }
 
 function barData() {
   const m = byDate();
   const todayStr = logicalTodayStr();
-  if (view === "week") {
-    return {
-      title: "This week (Mon–Sun)",
-      items: weekDays().map((d) => {
-        const it = dayItem(d, m, todayStr);
-        it.label = d.toLocaleDateString("en-US", { weekday: "short" });
-        return it;
-      }),
-    };
+  const r = selectedRange();
+  const title = `${fmtRangeLabel()} · ${BUCKET_LABELS[bucketSize] || "1 day"}`;
+  if (bucketSize === "1w") {
+    return { title, items: groupWeeks(r.start, r.end, m, todayStr), grouped: true };
   }
-  if (view === "month") {
-    return {
-      title: "This month (per day)",
-      items: monthDays().map((d) => {
-        const it = dayItem(d, m, todayStr);
-        it.label = String(d.getDate());
-        it.sub = "";
-        return it;
-      }),
-    };
+  if (bucketSize === "1mo") {
+    return { title, items: groupMonths(r.start, r.end, m, todayStr), grouped: true };
   }
-  if (view === "custom") {
-    const todayStr2 = logicalTodayStr();
-    let sStr = customPreset === "all" ? earliestEntryDate() || todayStr2 : customStart;
-    let s = parseLocalDate(sStr);
-    let e = parseLocalDate(customEnd);
-    if (!s || !e || s > e) return { title: "Custom", items: [], grouped: false };
-    // hard cap so the DOM stays usable (All time with years of data still fine: weekly bars)
-    const maxStart = new Date(e);
-    maxStart.setDate(maxStart.getDate() - 730);
-    if (s < maxStart) s = maxStart;
-    const days = Math.round((e - s) / 86400000) + 1;
-    if (days > 62) {
-      return { title: `Custom (${fmtRangeLabel()}, by week)`, items: groupWeeks(fmtLocal(s), fmtLocal(e), m, todayStr), grouped: true };
-    }
-    const items = [];
-    for (let i = 0; i < days; i++) {
-      const d = new Date(s);
-      d.setDate(s.getDate() + i);
-      const it = dayItem(d, m, todayStr);
-      it.label = fmtLocal(d).slice(5);
-      it.sub = "";
-      items.push(it);
-    }
-    return { title: `Custom (${fmtRangeLabel()})`, items, grouped: false };
+  const days = Math.round((r.e - r.s) / 86400000) + 1;
+  const items = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(r.s);
+    d.setDate(r.s.getDate() + i);
+    const it = dayItem(d, m, todayStr);
+    it.label = days <= 7 ? d.toLocaleDateString("en-US", { weekday: "short" }) : fmtLocal(d).slice(5);
+    it.sub = days <= 7 ? fmtLocal(d).slice(5) : "";
+    items.push(it);
   }
-  if (view === "byweek") return { title: "Last 8 weeks", items: lastNWeeks(8) };
-  return { title: "Last 6 months", items: lastNMonths(6) };
+  return { title, items, grouped: false };
 }
 
 function metricVal(it) {
@@ -507,22 +433,44 @@ function metricText(it) {
   if (it.na || it.hours == null) return "n/a";
   return it.hours ? it.hours.toFixed(it.hours < 10 ? 2 : 1) : "0";
 }
-function metricTip(it) {
-  const name = chartMetric === "hours" ? "hours" : chartMetric;
-  if (it.future) return `${it.key || it.label}: future`;
-  if (chartMetric === "hours") {
-    return `${it.key || it.label}: ${it.hours == null ? "n/a" : it.hours.toFixed(2) + "h"}`;
-  }
-  const t = chartMetric === "start" ? it.start : it.stop;
-  return `${it.key || it.label}: ${t ? fmtClock(t) : "n/a"} ${name}`;
+function hideTip() {
+  $("chartTip").classList.add("hidden");
+}
+function placeTip(ev) {
+  const tip = $("chartTip");
+  const pad = 12;
+  let x = ev.clientX + 14;
+  let y = ev.clientY + 14;
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  if (x + tw + pad > window.innerWidth) x = ev.clientX - tw - 10;
+  if (y + th + pad > window.innerHeight) y = ev.clientY - th - 10;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${y}px`;
+}
+function showTip(it, ev, grouped) {
+  const tip = $("chartTip");
+  const hours = it.future || it.na || it.hours == null ? "n/a" : `${it.hours.toFixed(2)}h`;
+  const start = it.future || !it.start ? "n/a" : fmtClock(it.start);
+  const stop = it.future || !it.stop ? "n/a" : fmtClock(it.stop);
+  const label = it.key && it.label && it.key !== it.label ? `${it.label} · ${it.key}` : (it.label || it.key || "");
+  const startL = grouped ? "Avg start" : "Start";
+  const stopL = grouped ? "Avg stop" : "Stop";
+  tip.innerHTML = `<div class="chart-tooltip-label">${label}</div>
+    <div class="chart-tooltip-row"><span>Hours</span><strong>${hours}</strong></div>
+    <div class="chart-tooltip-row"><span>${startL}</span><strong>${start}</strong></div>
+    <div class="chart-tooltip-row"><span>${stopL}</span><strong>${stop}</strong></div>`;
+  tip.classList.remove("hidden");
+  placeTip(ev);
 }
 
 function renderAll() {
+  hideTip();
   const { title, items, grouped } = barData();
-  const groupedTime = (view === "byweek" || view === "bymonth" || grouped) && chartMetric !== "hours";
+  const groupedTime = grouped && chartMetric !== "hours";
   const metricName = chartMetric === "hours" ? "hours" : groupedTime ? `avg ${chartMetric}` : chartMetric;
   $("viewTitle").textContent = `${title} · ${metricName} · ${settings.use_auto_subtract ? "auto subtract" : "manual subtract"}`;
-  if (view === "custom") $("rangeLabel").textContent = fmtRangeLabel();
+  $("rangeLabel").textContent = fmtRangeLabel();
   const vals = items.filter((i) => !i.future && !i.na && metricVal(i) != null).map(metricVal);
   const max = Math.max(1, ...vals);
   const chart = $("chart");
@@ -540,17 +488,19 @@ function renderAll() {
     const isZero = chartMetric === "hours" && !it.hours && !it.na && !it.future;
     b.className = "bar" + (isZero ? " zero" : "") + (it.future ? " future" : "") + (empty && !it.future ? " na" : "");
     b.style.height = h + "px";
-    col.title = metricTip(it);
     const l = document.createElement("div");
     l.className = "bar-label";
     l.textContent = it.label;
     col.append(v, b, l);
-    if (it.sub && view !== "month") {
+    if (it.sub) {
       const s = document.createElement("div");
       s.className = "bar-sub";
       s.textContent = it.sub;
       col.append(s);
     }
+    col.addEventListener("pointerenter", (ev) => showTip(it, ev, grouped));
+    col.addEventListener("pointermove", placeTip);
+    col.addEventListener("pointerleave", hideTip);
     chart.append(col);
   }
   const n = items.length;
@@ -596,7 +546,7 @@ function renderAll() {
   $("daysN").textContent = String(allDays.length);
   const tb = $("rows");
   tb.innerHTML = "";
-  if ((view === "week" || view === "month" || view === "custom") && !grouped) {
+  if (!grouped) {
     const rows = items.filter((i) => !i.future).slice().reverse();
     for (const it of rows) {
       const e = byDate().get(it.key);
@@ -657,16 +607,10 @@ function rowEl(e) {
   return tr;
 }
 
-document.querySelectorAll(".tab").forEach((b) =>
-  b.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active");
-    view = b.dataset.view;
-    $("pickerWrap").classList.toggle("hidden", view !== "custom");
-    if (view === "custom") $("rangeLabel").textContent = fmtRangeLabel();
-    renderAll();
-  })
-);
+$("bucketSize").addEventListener("change", (ev) => {
+  bucketSize = ev.target.value;
+  renderAll();
+});
 $("chartMetric").addEventListener("change", (ev) => {
   chartMetric = ev.target.value;
   renderAll();
